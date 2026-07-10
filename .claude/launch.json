@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-viewer",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "modules.web_viewer.app",
+        "--config",
+        "/private/tmp/claude-501/-Users-adam-meshcore-bot/31648a90-50b9-4cae-b1f6-0e7815c5a855/scratchpad/viewer/config.ini",
+        "--port",
+        "8757"
+      ],
+      "port": 8757
+    }
+  ]
+}

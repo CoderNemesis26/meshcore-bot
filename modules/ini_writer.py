@@ -148,7 +148,12 @@ def update_ini_values(
 
     def _record_section_boundary() -> None:
         if current_norm is not None and current_norm in remaining:
-            section_body_end[current_norm] = len(out)
+            # Walk back over trailing blank lines so appended keys sit directly
+            # under the section's last entry instead of after the gap.
+            end = len(out)
+            while end > 0 and out[end - 1].strip() == "":
+                end -= 1
+            section_body_end[current_norm] = end
 
     for raw in lines:
         section_match = _SECTION_RE.match(raw)
