@@ -290,7 +290,10 @@ def build_plugin_settings_view(
                 label=name.replace("_", " ").title(),
                 description=getattr(cls, "description", "") or "",
                 category=getattr(cls, "category", "general") or "general",
-                enabled_default=True,
+                # Commands are active unless turned off, except plugins that
+                # declare themselves opt-in (e.g. Announcements, Greeter read
+                # 'enabled' with fallback=False in __init__).
+                enabled_default=bool(getattr(cls, "settings_enabled_default", True)),
             ))
         except Exception as exc:  # noqa: BLE001 - one bad plugin must not break the list
             if logger:
@@ -306,7 +309,7 @@ def build_plugin_settings_view(
                 label=section.replace("_", " "),
                 description=getattr(cls, "description", "") or "",
                 category="service",
-                enabled_default=False,
+                enabled_default=bool(getattr(cls, "settings_enabled_default", False)),
             ))
         except Exception as exc:  # noqa: BLE001 - one bad plugin must not break the list
             if logger:

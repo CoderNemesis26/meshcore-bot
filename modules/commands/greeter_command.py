@@ -24,6 +24,10 @@ class GreeterCommand(BaseCommand):
     description = "Greets users on their first public channel message (once globally by default, or per-channel if configured)"
     category = "system"
 
+    # Opt-in command: _load_config reads 'enabled' with fallback=False, so the
+    # settings UI must also show "off" when the key is absent.
+    settings_enabled_default = False
+
     # Web-viewer settings schema (see modules/settings_schema.py)
     settings_schema = [
         {"key": "greeting_message", "label": "Greeting message", "type": "str",

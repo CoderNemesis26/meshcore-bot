@@ -115,7 +115,7 @@ from modules.config_snapshot import config_to_redacted_sections
 from modules.feed_manager import FeedManager
 from modules.repeater_manager import RepeaterManager
 from modules.url_shortener import _coerce_url_string
-from modules.utils import calculate_distance, resolve_path
+from modules.utils import resolve_path
 from modules.web_viewer.config_panels import CONFIG_PANELS, PANEL_CATEGORIES
 from modules.web_viewer.integration import normalized_web_viewer_password
 
@@ -740,7 +740,12 @@ class BotDataViewer:
                 for ds in entry.get('dynamic_sections', []):
                     dsec = ds['section']
                     prefix = ds.get('key_prefix', '') or ''
-                    rows = submitted_dyn.get(dsec, [])
+                    if dsec not in submitted_dyn:
+                        # Payload didn't include this editor's rows (partial or
+                        # scripted save) — leave the managed keys untouched
+                        # rather than treating absence as "delete everything".
+                        continue
+                    rows = submitted_dyn.get(dsec) or []
                     new_full: dict[str, str] = {}
                     seen_full: set[str] = set()
                     seen_disp: set[str] = set()
@@ -778,10 +783,14 @@ class BotDataViewer:
                 submitted_blocks = data.get('repeating_blocks', {}) or {}
                 for rb in entry.get('repeating_blocks', []):
                     bid = rb['id']
+                    if bid not in submitted_blocks:
+                        # Same defensive rule as dynamic sections: absent from
+                        # the payload means "don't touch", not "delete all".
+                        continue
                     enabled_field = rb['enabled_field']
                     field_by_key = {f['key']: f for f in rb['fields']}
                     written: set[str] = set()
-                    for i, block in enumerate(submitted_blocks.get(bid, []), start=1):
+                    for i, block in enumerate(submitted_blocks.get(bid) or [], start=1):
                         bvals = block.get('values', {}) or {}
                         for k, val in bvals.items():
                             full = f"{bid}{i}_{k}"

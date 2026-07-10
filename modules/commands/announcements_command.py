@@ -25,6 +25,10 @@ class AnnouncementsCommand(BaseCommand):
     requires_dm = True
     category = "admin"
 
+    # Opt-in command: __init__ reads 'enabled' with fallback=False, so the
+    # settings UI must also show "off" when the key is absent.
+    settings_enabled_default = False
+
     # Web-viewer settings schema (see modules/settings_schema.py).
     # announce.<trigger> keys are dynamic and appear under "Other config values".
     settings_schema = [
