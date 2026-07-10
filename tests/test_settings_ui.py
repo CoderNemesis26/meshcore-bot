@@ -8,7 +8,6 @@ modules/settings_store.py (INI backend), and the /api/plugins endpoints.
 from __future__ import annotations
 
 import configparser
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +21,6 @@ from modules.settings_schema import (
     validate_field,
 )
 from modules.settings_store import ConfigIniStore, get_settings_store
-
 
 # ---------------------------------------------------------------------------
 # ini_writer

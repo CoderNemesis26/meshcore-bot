@@ -119,7 +119,11 @@ def main():
     try:
         from modules.config_validation import (
             SEVERITY_ERROR as _SEV_ERR,
+        )
+        from modules.config_validation import (
             SEVERITY_WARNING as _SEV_WARN,
+        )
+        from modules.config_validation import (
             validate_config as _startup_validate,
         )
         _issues = [
