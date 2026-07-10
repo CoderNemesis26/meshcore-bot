@@ -15,6 +15,7 @@ from ..command_prefix import (
     load_command_prefix_settings,
     normalize_command_content,
 )
+from ..config_schema import LEGACY_ENABLED_ALIASES
 from ..models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD, MeshMessage
 from ..security_utils import validate_pubkey_format
 from ..utils import format_elapsed_display, get_config_timezone
@@ -125,25 +126,6 @@ class BaseCommand(ABC):
             'Weather': 'Wx_Command',  # wx command reads from [Wx_Command]; [Weather] is legacy
         }
         # Legacy [Jokes] -> [Joke_Command] / [DadJoke_Command]: (requested_section, key) -> legacy section
-        # For 'enabled', also try legacy key: (section, key) -> (legacy_section, legacy_key) or list of same
-        legacy_key_alias = {
-            ('Joke_Command', 'enabled'): ('Jokes', 'joke_enabled'),
-            ('DadJoke_Command', 'enabled'): ('Jokes', 'dadjoke_enabled'),
-            # Standard enabled with *_enabled fallback (same section, then old section)
-            ('Stats_Command', 'enabled'): [
-                ('Stats_Command', 'stats_enabled'),
-                ('Stats', 'stats_enabled'),
-            ],
-            ('Sports_Command', 'enabled'): [
-                ('Sports_Command', 'sports_enabled'),
-                ('Sports', 'sports_enabled'),
-            ],
-            ('Hacker_Command', 'enabled'): [
-                ('Hacker_Command', 'hacker_enabled'),
-                ('Hacker', 'hacker_enabled'),
-            ],
-            ('Alert_Command', 'enabled'): [('Alert_Command', 'alert_enabled')],
-        }
         legacy_section_fallback = {
             ('Joke_Command', 'joke_enabled'): 'Jokes',
             ('Joke_Command', 'seasonal_jokes'): 'Jokes',
@@ -209,10 +191,10 @@ class BaseCommand(ABC):
                     self.logger.debug(f"Error reading config {sec}.{key}: {e}")
                     continue
 
-        # Try legacy key alias (e.g. [Jokes] joke_enabled when requesting Joke_Command enabled)
-        alias = legacy_key_alias.get((section, key))
-        if alias:
-            aliases = [alias] if isinstance(alias, tuple) else alias
+        # Try legacy enabled aliases (e.g. [Jokes] joke_enabled when requesting
+        # Joke_Command enabled); shared map in modules/config_schema.py.
+        aliases = LEGACY_ENABLED_ALIASES.get(section, ()) if key == 'enabled' else ()
+        if aliases:
             for legacy_sec, legacy_key in aliases:
                 if self.bot.config.has_section(legacy_sec) and self.bot.config.has_option(legacy_sec, legacy_key):
                     try:

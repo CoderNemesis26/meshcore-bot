@@ -39,23 +39,15 @@ import os
 import re
 from typing import Any, Optional
 
+# Legacy [section] enabled aliases (shared with BaseCommand.get_config_value)
+# so a plugin's on/off state displays correctly before the first canonical save.
+from modules.config_schema import LEGACY_ENABLED_ALIASES as _ENABLED_LEGACY_ALIASES
+
 VALID_TYPES = {"bool", "int", "float", "str", "enum", "list"}
 
 # Truthy/falsey string forms accepted for bool fields (configparser-compatible).
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
-
-# Legacy [section] enabled aliases, mirroring base_command.get_config_value, so a
-# plugin's current on/off state displays correctly before the first canonical save.
-# Maps canonical section -> list of (legacy_section, legacy_key).
-_ENABLED_LEGACY_ALIASES: dict[str, list[tuple[str, str]]] = {
-    "DadJoke_Command": [("Jokes", "dadjoke_enabled")],
-    "Joke_Command": [("Jokes", "joke_enabled")],
-    "Stats_Command": [("Stats_Command", "stats_enabled"), ("Stats", "stats_enabled")],
-    "Sports_Command": [("Sports_Command", "sports_enabled"), ("Sports", "sports_enabled")],
-    "Hacker_Command": [("Hacker_Command", "hacker_enabled"), ("Hacker", "hacker_enabled")],
-    "Alert_Command": [("Alert_Command", "alert_enabled")],
-}
 
 # Command name -> section base for camelCase names (mirrors
 # BaseCommand._derive_config_section_name).
