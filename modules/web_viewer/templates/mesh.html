@@ -74,7 +74,7 @@
                     <div>
                         <div class="small text-muted">Edges</div>
                         <div id="stat-edge-count" class="text-info fw-bold" style="font-size: 1.1rem; line-height: 1.2;">0</div>
-                        <div class="small text-muted">Total Connections</div>
+                        <div class="small text-muted" id="stat-edge-detail">Total Connections</div>
                     </div>
                 </div>
             </div>
@@ -183,6 +183,13 @@
                         </select>
                     </div>
                     <div class="col-md-2">
+                        <label for="filter-evidence" class="form-label">Evidence</label>
+                        <select class="form-select" id="filter-evidence" onchange="onEvidenceChange();" title="Multi-byte only: build the graph solely from unique multi-byte path observations, ignoring ambiguous single-byte evidence">
+                            <option value="all" selected>All Evidence</option>
+                            <option value="multibyte">Multi-byte Only</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
                         <label for="filter-starred" class="form-label">&nbsp;</label>
                         <div class="d-flex align-items-center" style="min-height: 38px;">
                             <div class="form-check mb-0">
@@ -191,9 +198,9 @@
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-2">
                         <label for="filter-search" class="form-label">Search Node</label>
-                        <input type="text" class="form-control" id="filter-search" placeholder="Name, prefix, or path (e.g., 7e,01,86)..." oninput="handleSearchInput();">
+                        <input type="text" class="form-control" id="filter-search" placeholder="Name, prefix, or path..." oninput="handleSearchInput();">
                     </div>
                 </div>
             </div>
@@ -226,6 +233,15 @@
                     <div class="connection-legend-item">
                         <span class="connection-legend-color" style="background-color: #9333ea;"></span>
                         <span>Bidirectional</span>
+                    </div>
+                    <hr style="margin: 4px 0;">
+                    <div class="connection-legend-item">
+                        <span style="display: inline-block; width: 18px; border-top: 2px solid currentColor; vertical-align: middle;"></span>
+                        <span>Multi-byte evidence</span>
+                    </div>
+                    <div class="connection-legend-item">
+                        <span style="display: inline-block; width: 18px; border-top: 2px dashed currentColor; vertical-align: middle;"></span>
+                        <span>Single-byte (uncertain)</span>
                     </div>
                 </div>
             </div>
@@ -501,6 +517,55 @@
     function findNodeByEdgePrefix(prefix) {
         if (!prefix) return null;
         return filteredNodeMap[prefix] || filteredNodes.find(n => n.prefix.startsWith(prefix) || prefix.startsWith(n.prefix)) || null;
+    }
+
+    // Prefix-compatible equality across resolutions (2, 4, or 6 hex chars):
+    // equal, or one is a prefix of the other. Needed wherever edges and nodes
+    // may carry different resolutions (e.g. 4-char edge vs 6-char node prefix).
+    function prefixesCompatible(a, b) {
+        if (!a || !b) return false;
+        return a === b || a.startsWith(b) || b.startsWith(a);
+    }
+
+    function edgeTouchesNode(edge, node) {
+        return prefixesCompatible(edge.from_prefix, node.prefix) || prefixesCompatible(edge.to_prefix, node.prefix);
+    }
+
+    // Great-circle distance fallback for edges without a stored distance
+    // (multi-byte derived edges carry none; compute from resolved node coords)
+    function haversineKm(lat1, lon1, lat2, lon2) {
+        const toRad = deg => deg * Math.PI / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+        return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function getEdgeDistance(edge, fromNode, toNode) {
+        if (edge.geographic_distance !== null && edge.geographic_distance !== undefined) {
+            return edge.geographic_distance;
+        }
+        if (fromNode && toNode) {
+            return haversineKm(fromNode.latitude, fromNode.longitude, toNode.latitude, toNode.longitude);
+        }
+        return null;
+    }
+
+    function isSingleByteEdge(edge) {
+        return edge.evidence === 'singlebyte';
+    }
+
+    function getEvidenceLabel(edge) {
+        if (edge.evidence === 'multibyte') {
+            return edge.path_count
+                ? `Multi-byte (${edge.path_count} unique path${edge.path_count === 1 ? '' : 's'})`
+                : 'Multi-byte confirmed';
+        }
+        if (edge.evidence === 'singlebyte') {
+            return 'Single-byte (identity uncertain)';
+        }
+        return null;
     }
 
     // Detect if input is a hex path (2+ hex values)
@@ -914,6 +979,10 @@
             
             document.getElementById('stat-node-count').textContent = stats.node_count || 0;
             document.getElementById('stat-edge-count').textContent = stats.total_edges || 0;
+            if (stats.multibyte_edges !== undefined) {
+                document.getElementById('stat-edge-detail').textContent =
+                    `${stats.multibyte_edges} multi-byte confirmed`;
+            }
             document.getElementById('stat-avg-obs').textContent = stats.avg_observations || 0;
             document.getElementById('stat-avg-dist').textContent = stats.avg_distance ? stats.avg_distance + ' km' : 'N/A';
             
@@ -945,7 +1014,9 @@
         
         try {
             // Load edges first so we can pass prefix_hex_chars to nodes (keeps node prefix in sync with edge prefixes)
-            const edgesResponse = await fetch('/api/mesh/edges');
+            const evidence = document.getElementById('filter-evidence').value;
+            const edgesUrl = evidence === 'multibyte' ? '/api/mesh/edges?evidence=multibyte' : '/api/mesh/edges';
+            const edgesResponse = await fetch(edgesUrl);
             const edgesData = await edgesResponse.json();
             allEdges = edgesData.edges || [];
             graphPrefixHexChars = (edgesData.prefix_hex_chars && [2, 4, 6].includes(edgesData.prefix_hex_chars))
@@ -992,7 +1063,8 @@
                 minObs: document.getElementById('filter-min-obs').value,
                 edgeDays: document.getElementById('filter-edge-days').value,
                 nodeDays: document.getElementById('filter-node-days').value,
-                starredOnly: document.getElementById('filter-starred').checked
+                starredOnly: document.getElementById('filter-starred').checked,
+                evidence: document.getElementById('filter-evidence').value
                 // Note: searchTerm is NOT saved - it should not persist across reloads
             };
             localStorage.setItem('meshGraphFilters', JSON.stringify(filters));
@@ -1019,6 +1091,9 @@
                 }
                 if (filters.starredOnly !== undefined) {
                     document.getElementById('filter-starred').checked = filters.starredOnly;
+                }
+                if (filters.evidence === 'all' || filters.evidence === 'multibyte') {
+                    document.getElementById('filter-evidence').value = filters.evidence;
                 }
                 // Note: searchTerm is NOT loaded - it should reset on page reload
             }
@@ -1101,6 +1176,13 @@
         }
     }
     
+    // Evidence mode is a server-side parameter, so changing it re-fetches data
+    // (loadData applies the current filters and re-renders when done)
+    function onEvidenceChange() {
+        saveFilters();
+        loadData().catch(error => console.error('Error reloading for evidence mode:', error));
+    }
+
     // Update filter label
     function updateFilterLabel(inputId, labelId) {
         const value = document.getElementById(inputId).value;
@@ -1331,22 +1413,26 @@
             
             const color = getEdgeColor(edge);
             const weight = Math.max(1, Math.log10(edge.observation_count) * 2);
-            
+            const edgeDistance = getEdgeDistance(edge, fromNode, toNode);
+            const evidenceLabel = getEvidenceLabel(edge);
+
             const line = L.polyline(
                 [[fromNode.latitude, fromNode.longitude], [toNode.latitude, toNode.longitude]],
                 {
                     color: color,
                     weight: weight,
                     opacity: getEdgeOpacity(edge),
+                    dashArray: isSingleByteEdge(edge) ? '6 6' : null, // Dash ambiguous single-byte evidence
                     pane: 'overlayPane' // Use overlayPane for edges (lower z-index)
                 }
             );
-            
+
             // Simple hover tooltip for quick info
             line.bindTooltip(`
                 ${formatPrefixWithBytes(edge.from_prefix)} → ${formatPrefixWithBytes(edge.to_prefix)}<br>
                 Observations: ${edge.observation_count}<br>
-                Distance: ${edge.geographic_distance ? edge.geographic_distance.toFixed(1) + ' km' : 'N/A'}<br>
+                ${evidenceLabel ? 'Evidence: ' + evidenceLabel + '<br>' : ''}
+                Distance: ${edgeDistance ? edgeDistance.toFixed(1) + ' km' : 'N/A'}<br>
                 Last Seen: ${edge.last_seen ? new Date(edge.last_seen).toLocaleString() : 'Never'}
             `);
             
@@ -1370,9 +1456,13 @@
                             <td style="padding: 2px 8px 2px 0; color: #888;"><strong>Observations:</strong></td>
                             <td style="padding: 2px 0;">${edge.observation_count}</td>
                         </tr>
+                        ${evidenceLabel ? `<tr>
+                            <td style="padding: 2px 8px 2px 0; color: #888;"><strong>Evidence:</strong></td>
+                            <td style="padding: 2px 0;">${evidenceLabel}</td>
+                        </tr>` : ''}
                         <tr>
                             <td style="padding: 2px 8px 2px 0; color: #888;"><strong>Distance:</strong></td>
-                            <td style="padding: 2px 0;">${edge.geographic_distance ? edge.geographic_distance.toFixed(2) + ' km' : 'N/A'}</td>
+                            <td style="padding: 2px 0;">${edgeDistance ? edgeDistance.toFixed(2) + ' km' : 'N/A'}</td>
                         </tr>
                         <tr>
                             <td style="padding: 2px 8px 2px 0; color: #888;"><strong>Avg Hop Position:</strong></td>
@@ -1657,6 +1747,7 @@
             
             // Only add if we haven't seen this edge ID before
             if (!edgeMapById.has(edgeId)) {
+                const evidenceLabel = getEvidenceLabel(edge);
                 edgeMapById.set(edgeId, {
                     id: edgeId, // Use unique IDs for edge ID
                     from: fromNodeId, // Use unique node ID
@@ -1666,8 +1757,10 @@
                         color: getEdgeColor(edge),
                         opacity: getEdgeOpacity(edge)
                     },
+                    dashes: isSingleByteEdge(edge), // Dash ambiguous single-byte evidence
                     arrows: 'to',
                     title: `${edge.from_prefix} → ${edge.to_prefix} (${edge.observation_count} obs)`
+                        + (evidenceLabel ? ` — ${evidenceLabel}` : '')
                 });
             }
         });
@@ -2353,9 +2446,9 @@
     function getNodeSize(node) {
         // Calculate degree (number of connections) using current filteredEdges
         // This ensures node size updates when filters change
-        const degree = filteredEdges.filter(e => 
-            e.from_prefix === node.prefix || e.to_prefix === node.prefix
-        ).length;
+        // Prefix-compatible matching so degree counts work when edges and nodes
+        // carry different resolutions (e.g. 4-char edge vs 6-char node prefix)
+        const degree = filteredEdges.filter(e => edgeTouchesNode(e, node)).length;
         // Base size 6, scale with degree, cap at 16
         return Math.max(6, Math.min(16, 6 + degree * 0.5));
     }
@@ -2406,11 +2499,10 @@
     }
     
     function showNodeDetails(node) {
-        const connections = filteredEdges.filter(e => 
-            e.from_prefix === node.prefix || e.to_prefix === node.prefix
-        );
-        const incoming = connections.filter(e => e.to_prefix === node.prefix).length;
-        const outgoing = connections.filter(e => e.from_prefix === node.prefix).length;
+        // Prefix-compatible matching across resolutions (see edgeTouchesNode)
+        const connections = filteredEdges.filter(e => edgeTouchesNode(e, node));
+        const incoming = connections.filter(e => prefixesCompatible(e.to_prefix, node.prefix)).length;
+        const outgoing = connections.filter(e => prefixesCompatible(e.from_prefix, node.prefix)).length;
         
         document.getElementById('nodeDetailsTitle').textContent = node.name;
         document.getElementById('nodeDetailsBody').innerHTML = `

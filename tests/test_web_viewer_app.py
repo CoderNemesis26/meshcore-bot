@@ -374,6 +374,130 @@ class TestApiExportPaths:
 
 
 # ---------------------------------------------------------------------------
+# api_mesh_edges (evidence modes)
+# ---------------------------------------------------------------------------
+
+
+def _seed_observed_path(db_path, path_hex, bytes_per_hop, observation_count=1,
+                        last_seen=None, packet_type='advert'):
+    """Insert an observed_paths row; from/to prefixes derived from the path."""
+    hex_chars = bytes_per_hop * 2
+    hops = [path_hex[i:i + hex_chars] for i in range(0, len(path_hex), hex_chars)]
+    ts = last_seen or time.strftime('%Y-%m-%dT%H:%M:%S')
+    with sqlite3.connect(db_path, timeout=60) as conn:
+        conn.execute("""
+            INSERT INTO observed_paths
+            (from_prefix, to_prefix, path_hex, path_length, bytes_per_hop,
+             packet_type, observation_count, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (hops[0], hops[-1], path_hex, len(path_hex) // 2, bytes_per_hop,
+              packet_type, observation_count, ts, ts))
+        conn.commit()
+
+
+class TestApiMeshEdgesEvidence:
+    def test_default_mode_tags_evidence_by_key_length(self, viewer_with_db):
+        with sqlite3.connect(viewer_with_db.db_path, timeout=60) as conn:
+            conn.execute("""
+                INSERT INTO mesh_connections (from_prefix, to_prefix, observation_count)
+                VALUES ('aa', 'bb', 5), ('aabb', 'ccdd', 3)
+            """)
+            conn.commit()
+
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/mesh/edges')
+            assert response.status_code == 200
+            edges = {(e['from_prefix'], e['to_prefix']): e
+                     for e in json.loads(response.data)['edges']}
+            assert edges[('aa', 'bb')]['evidence'] == 'singlebyte'
+            assert edges[('aabb', 'ccdd')]['evidence'] == 'multibyte'
+
+    def test_multibyte_mode_derives_consecutive_pairs(self, viewer_with_db):
+        # 2-byte path with 3 hops -> two directed edges; 1-byte row excluded
+        _seed_observed_path(viewer_with_db.db_path, 'aaaabbbbcccc', 2, observation_count=2)
+        _seed_observed_path(viewer_with_db.db_path, 'ddee', 1, observation_count=9)
+
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/mesh/edges?evidence=multibyte')
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['evidence'] == 'multibyte'
+            edges = {(e['from_prefix'], e['to_prefix']): e for e in data['edges']}
+            assert set(edges) == {('aaaa', 'bbbb'), ('bbbb', 'cccc')}
+            edge = edges[('aaaa', 'bbbb')]
+            assert edge['observation_count'] == 2
+            assert edge['path_count'] == 1
+            assert edge['evidence'] == 'multibyte'
+            assert edge['avg_hop_position'] == 1
+            assert edges[('bbbb', 'cccc')]['avg_hop_position'] == 2
+
+    def test_multibyte_mode_coalesces_unique_lower_resolution(self, viewer_with_db):
+        # One 3-byte edge plus a 2-byte observation of the same link:
+        # unique prefix match, so the 2-byte counts merge into the 3-byte edge
+        _seed_observed_path(viewer_with_db.db_path, 'aaaa11bbbb22', 3, observation_count=4)
+        _seed_observed_path(viewer_with_db.db_path, 'aaaabbbb', 2, observation_count=3)
+
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/mesh/edges?evidence=multibyte')
+            data = json.loads(response.data)
+            edges = {(e['from_prefix'], e['to_prefix']): e for e in data['edges']}
+            assert set(edges) == {('aaaa11', 'bbbb22')}
+            assert edges[('aaaa11', 'bbbb22')]['observation_count'] == 7
+            assert edges[('aaaa11', 'bbbb22')]['path_count'] == 2
+
+    def test_multibyte_mode_keeps_ambiguous_resolutions_separate(self, viewer_with_db):
+        # Two distinct 3-byte edges share the same 4-char truncation:
+        # the 2-byte observation is ambiguous and must stay its own edge
+        _seed_observed_path(viewer_with_db.db_path, 'aaaa11bbbb22', 3)
+        _seed_observed_path(viewer_with_db.db_path, 'aaaa33bbbb44', 3)
+        _seed_observed_path(viewer_with_db.db_path, 'aaaabbbb', 2)
+
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/mesh/edges?evidence=multibyte')
+            data = json.loads(response.data)
+            keys = {(e['from_prefix'], e['to_prefix']) for e in data['edges']}
+            assert keys == {('aaaa11', 'bbbb22'), ('aaaa33', 'bbbb44'), ('aaaa', 'bbbb')}
+
+    def test_multibyte_mode_min_observations_applied_after_merge(self, viewer_with_db):
+        _seed_observed_path(viewer_with_db.db_path, 'aaaa11bbbb22', 3, observation_count=2)
+        _seed_observed_path(viewer_with_db.db_path, 'aaaabbbb', 2, observation_count=2)
+        _seed_observed_path(viewer_with_db.db_path, 'cccc55dddd66', 3, observation_count=1)
+
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/mesh/edges?evidence=multibyte&min_observations=4')
+            data = json.loads(response.data)
+            keys = {(e['from_prefix'], e['to_prefix']) for e in data['edges']}
+            # merged edge has 4 observations and survives; the other has 1
+            assert keys == {('aaaa11', 'bbbb22')}
+
+    def test_multibyte_mode_days_filter(self, viewer_with_db):
+        _seed_observed_path(viewer_with_db.db_path, 'aaaa11bbbb22', 3,
+                            last_seen='2020-01-01T00:00:00')
+        _seed_observed_path(viewer_with_db.db_path, 'cccc55dddd66', 3)
+
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/mesh/edges?evidence=multibyte&days=7')
+            data = json.loads(response.data)
+            keys = {(e['from_prefix'], e['to_prefix']) for e in data['edges']}
+            assert keys == {('cccc55', 'dddd66')}
+
+    def test_stats_include_multibyte_edge_count(self, viewer_with_db):
+        with sqlite3.connect(viewer_with_db.db_path, timeout=60) as conn:
+            conn.execute("""
+                INSERT INTO mesh_connections (from_prefix, to_prefix, observation_count)
+                VALUES ('aa', 'bb', 5), ('aabb', 'ccdd', 3), ('aabb11', 'ccdd22', 1)
+            """)
+            conn.commit()
+
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/mesh/stats')
+            assert response.status_code == 200
+            stats = json.loads(response.data)
+            assert stats['total_edges'] == 3
+            assert stats['multibyte_edges'] == 2
+
+
+# ---------------------------------------------------------------------------
 # api_geocode_contact
 # ---------------------------------------------------------------------------
 

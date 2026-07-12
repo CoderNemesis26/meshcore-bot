@@ -464,6 +464,105 @@ class BotDataViewer:
         finally:
             conn.close()
 
+    def _derive_multibyte_evidence_edges(
+        self, days: int | None = None, min_observations: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Derive mesh edges purely from multi-byte path evidence.
+
+        Splits each observed_paths row with bytes_per_hop >= 2 into consecutive
+        hop pairs and aggregates per directed pair. Unlike mesh_connections, this
+        never mixes in single-byte observations, so edge identity is unambiguous
+        (up to 2/3-byte prefix collisions, which are rare).
+
+        Edges observed at 2-byte resolution are coalesced into a 3-byte edge when
+        exactly one 3-byte edge prefix-matches both endpoints — the same
+        unique-match rule MeshGraph.add_edge applies at write time.
+
+        Returns edge dicts matching the /api/mesh/edges schema, plus:
+          path_count — number of distinct observed paths crossing the edge
+          evidence   — always 'multibyte'
+        """
+        query = '''
+            SELECT path_hex, bytes_per_hop, observation_count, first_seen, last_seen
+            FROM observed_paths
+            WHERE bytes_per_hop >= 2
+        '''
+        params: list[Any] = []
+        if days is not None:
+            query += ' AND last_seen >= datetime("now", "-" || ? || " days")'
+            params.append(days)
+
+        with self._with_db_connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        edges: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            step = (row['bytes_per_hop'] or 0) * 2
+            path_hex = (row['path_hex'] or '').lower()
+            if step < 4 or not path_hex or len(path_hex) % step != 0:
+                continue
+            hops = [path_hex[i:i + step] for i in range(0, len(path_hex), step)]
+            obs = row['observation_count'] or 1
+            for i in range(len(hops) - 1):
+                key = (hops[i], hops[i + 1])
+                agg = edges.get(key)
+                if agg is None:
+                    edges[key] = agg = {
+                        'observation_count': 0,
+                        'path_count': 0,
+                        'first_seen': row['first_seen'],
+                        'last_seen': row['last_seen'],
+                        'hop_position_sum': 0.0,
+                    }
+                agg['observation_count'] += obs
+                agg['path_count'] += 1
+                if row['first_seen'] and (agg['first_seen'] is None or row['first_seen'] < agg['first_seen']):
+                    agg['first_seen'] = row['first_seen']
+                if row['last_seen'] and (agg['last_seen'] is None or row['last_seen'] > agg['last_seen']):
+                    agg['last_seen'] = row['last_seen']
+                # hop_position is the 1-based index of the receiving hop (matches
+                # graph_trace_helper semantics); weighted by observation count.
+                agg['hop_position_sum'] += (i + 1) * obs
+
+        # Coalesce 2-byte edges into a 3-byte edge when exactly one matches.
+        # (Hops within a path share one resolution, so keys are homogeneous.)
+        by_truncated_key: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for key in edges:
+            if len(key[0]) == 6:
+                by_truncated_key.setdefault((key[0][:4], key[1][:4]), []).append(key)
+        for key in [k for k in edges if len(k[0]) == 4]:
+            candidates = by_truncated_key.get(key, [])
+            if len(candidates) == 1:
+                target = edges[candidates[0]]
+                source = edges.pop(key)
+                target['observation_count'] += source['observation_count']
+                target['path_count'] += source['path_count']
+                target['hop_position_sum'] += source['hop_position_sum']
+                if source['first_seen'] and (target['first_seen'] is None or source['first_seen'] < target['first_seen']):
+                    target['first_seen'] = source['first_seen']
+                if source['last_seen'] and (target['last_seen'] is None or source['last_seen'] > target['last_seen']):
+                    target['last_seen'] = source['last_seen']
+
+        result = []
+        for (from_prefix, to_prefix), agg in edges.items():
+            if min_observations is not None and agg['observation_count'] < min_observations:
+                continue
+            result.append({
+                'from_prefix': from_prefix,
+                'to_prefix': to_prefix,
+                'from_public_key': None,
+                'to_public_key': None,
+                'observation_count': agg['observation_count'],
+                'path_count': agg['path_count'],
+                'first_seen': agg['first_seen'],
+                'last_seen': agg['last_seen'],
+                'avg_hop_position': agg['hop_position_sum'] / agg['observation_count'],
+                'geographic_distance': None,
+                'evidence': 'multibyte',
+            })
+        result.sort(key=lambda e: e['last_seen'] or '', reverse=True)
+        return result
+
     def _resolve_path(self, path_input: str) -> dict[str, Any]:
         """Resolve a hex path to repeater names/locations for the mesh map.
 
@@ -2018,7 +2117,12 @@ class BotDataViewer:
 
         @self.app.route('/api/mesh/edges')
         def api_mesh_edges():
-            """Get all graph edges with metadata"""
+            """Get all graph edges with metadata.
+
+            evidence=multibyte derives edges purely from unique multi-byte path
+            observations (observed_paths, bytes_per_hop >= 2), bypassing the
+            mesh_connections merge heuristics that single-byte evidence feeds into.
+            """
             conn = None
             try:
                 # Get optional query parameters
@@ -2026,6 +2130,20 @@ class BotDataViewer:
                 days = request.args.get('days', type=int)
                 min_distance = request.args.get('min_distance', type=float)
                 max_distance = request.args.get('max_distance', type=float)
+                evidence = request.args.get('evidence', 'all')
+
+                if evidence == 'multibyte':
+                    edges = self._derive_multibyte_evidence_edges(
+                        days=days, min_observations=min_observations
+                    )
+                    prefix_hex_chars = max(
+                        (len(e['from_prefix']) for e in edges), default=2
+                    )
+                    return jsonify({
+                        'edges': edges,
+                        'prefix_hex_chars': max(2, prefix_hex_chars),
+                        'evidence': 'multibyte',
+                    })
 
                 conn = self._get_db_connection()
                 cursor = conn.cursor()
@@ -2072,6 +2190,10 @@ class BotDataViewer:
                 for row in rows:
                     fp, tp = row['from_prefix'], row['to_prefix']
                     prefix_hex_chars = max(prefix_hex_chars, len(fp) if fp else 0, len(tp) if tp else 0)
+                    # Edges keyed at 4+ hex chars were necessarily created (or promoted)
+                    # by a multi-byte path observation; 2-char keys carry only ambiguous
+                    # single-byte evidence.
+                    is_multibyte = bool(fp) and bool(tp) and len(fp) >= 4 and len(tp) >= 4
                     edges.append({
                         'from_prefix': fp.lower() if fp else '',
                         'to_prefix': tp.lower() if tp else '',
@@ -2081,7 +2203,8 @@ class BotDataViewer:
                         'first_seen': row['first_seen'],
                         'last_seen': row['last_seen'],
                         'avg_hop_position': row['avg_hop_position'],
-                        'geographic_distance': row['geographic_distance']
+                        'geographic_distance': row['geographic_distance'],
+                        'evidence': 'multibyte' if is_multibyte else 'singlebyte'
                     })
 
                 return jsonify({'edges': edges, 'prefix_hex_chars': prefix_hex_chars or 2})
@@ -2123,7 +2246,8 @@ class BotDataViewer:
                         MAX(geographic_distance) as max_distance,
                         COUNT(CASE WHEN from_public_key IS NOT NULL THEN 1 END) as edges_with_from_key,
                         COUNT(CASE WHEN to_public_key IS NOT NULL THEN 1 END) as edges_with_to_key,
-                        COUNT(CASE WHEN from_public_key IS NOT NULL AND to_public_key IS NOT NULL THEN 1 END) as edges_with_both_keys
+                        COUNT(CASE WHEN from_public_key IS NOT NULL AND to_public_key IS NOT NULL THEN 1 END) as edges_with_both_keys,
+                        COUNT(CASE WHEN LENGTH(from_prefix) >= 4 AND LENGTH(to_prefix) >= 4 THEN 1 END) as multibyte_edges
                     FROM mesh_connections
                 ''')
                 edge_stats = cursor.fetchone()
@@ -2169,6 +2293,7 @@ class BotDataViewer:
                     'edges_with_from_key': edge_stats['edges_with_from_key'] or 0,
                     'edges_with_to_key': edge_stats['edges_with_to_key'] or 0,
                     'edges_with_both_keys': edge_stats['edges_with_both_keys'] or 0,
+                    'multibyte_edges': edge_stats['multibyte_edges'] or 0,
                     'top_connected': [{'prefix': prefix, 'count': count} for prefix, count in top_connected],
                     'recent_edges_24h': recent_edges
                 }
