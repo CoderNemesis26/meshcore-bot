@@ -155,7 +155,7 @@
                 <div class="row">
                     <div class="col-md-2">
                         <label for="filter-min-obs" class="form-label">Min Observations</label>
-                        <input type="range" class="form-range" id="filter-min-obs" min="1" max="50" value="1" oninput="updateFilterLabel('filter-min-obs', 'label-min-obs'); saveFilters();">
+                        <input type="range" class="form-range" id="filter-min-obs" min="0" max="100" value="0" oninput="onMinObsInput();">
                         <small id="label-min-obs" class="text-muted">1</small>
                     </div>
                     <div class="col-md-2">
@@ -985,25 +985,54 @@
             }
             document.getElementById('stat-avg-obs').textContent = stats.avg_observations || 0;
             document.getElementById('stat-avg-dist').textContent = stats.avg_distance ? stats.avg_distance + ' km' : 'N/A';
-            
-            // Set initial Min Observations filter to floor of average observations
-            // Only if no saved filter value exists
-            const savedFilters = localStorage.getItem('meshGraphFilters');
-            if (!savedFilters && stats.avg_observations && stats.avg_observations > 0) {
-                const minObsValue = Math.floor(stats.avg_observations);
-                const minObsSlider = document.getElementById('filter-min-obs');
-                const minObsLabel = document.getElementById('label-min-obs');
-                if (minObsSlider && !minObsSlider.value || minObsSlider.value === '1') {
-                    minObsSlider.value = minObsValue;
-                    // Update label directly without triggering applyFilters (data not loaded yet)
-                    if (minObsLabel) {
-                        minObsLabel.textContent = minObsValue;
-                    }
-                }
-            }
         } catch (error) {
             console.error('Error loading stats:', error);
         }
+    }
+
+    // --- Min Observations slider ---
+    // Observation counts are heavy-tailed (median ~single digits, max in the tens of
+    // thousands), so the slider position maps logarithmically onto a threshold of
+    // 1..minObsScaleMax. minObsValue (the threshold) is the source of truth: it is
+    // what gets persisted, and the position is re-derived from it whenever the data
+    // (and therefore the scale) changes.
+    let minObsValue = null; // null until restored from storage or defaulted from data
+    let minObsScaleMax = 100;
+
+    function minObsPositionToThreshold(pos) {
+        return Math.max(1, Math.round(Math.pow(minObsScaleMax, pos / 100)));
+    }
+
+    function minObsThresholdToPosition(threshold) {
+        const clamped = Math.min(Math.max(threshold, 1), minObsScaleMax);
+        return Math.round(100 * Math.log(clamped) / Math.log(minObsScaleMax));
+    }
+
+    // Recompute the slider scale from the loaded edges; default the threshold to the
+    // median observation count on first visit (the old default used the average,
+    // which sits above the 75th percentile on heavy-tailed data and hid most edges).
+    function syncMinObsSlider() {
+        const counts = allEdges.map(e => e.observation_count || 0).sort((a, b) => a - b);
+        const maxCount = counts.length ? counts[counts.length - 1] : 0;
+        minObsScaleMax = Math.max(10, maxCount);
+        if (minObsValue === null) {
+            minObsValue = counts.length ? Math.max(1, counts[Math.floor(counts.length / 2)]) : 1;
+        }
+        document.getElementById('filter-min-obs').value = minObsThresholdToPosition(minObsValue);
+    }
+
+    function updateMinObsLabel() {
+        const label = document.getElementById('label-min-obs');
+        if (label) {
+            label.textContent = `≥ ${minObsValue || 1} obs · ${filteredEdges.length.toLocaleString()}/${allEdges.length.toLocaleString()} edges`;
+        }
+    }
+
+    function onMinObsInput() {
+        const pos = parseInt(document.getElementById('filter-min-obs').value, 10) || 0;
+        minObsValue = minObsPositionToThreshold(pos);
+        applyFilters();
+        saveFilters();
     }
     
     // Load nodes and edges
@@ -1044,7 +1073,10 @@
                 const key = `${edge.from_prefix}-${edge.to_prefix}`;
                 edgeMap[key] = edge;
             });
-            
+
+            // Rescale the min-observations slider to the new edge distribution
+            syncMinObsSlider();
+
             if (!skipRender) {
                 // Apply filters (will use the min observations value set by loadStats)
                 // Note: applyFilters() will preserve and re-apply path highlights via renderMap()
@@ -1060,7 +1092,7 @@
     function saveFilters() {
         try {
             const filters = {
-                minObs: document.getElementById('filter-min-obs').value,
+                minObs: minObsValue, // threshold, not slider position
                 edgeDays: document.getElementById('filter-edge-days').value,
                 nodeDays: document.getElementById('filter-node-days').value,
                 starredOnly: document.getElementById('filter-starred').checked,
@@ -1079,9 +1111,13 @@
             const saved = localStorage.getItem('meshGraphFilters');
             if (saved) {
                 const filters = JSON.parse(saved);
-                if (filters.minObs !== undefined) {
-                    document.getElementById('filter-min-obs').value = filters.minObs;
-                    updateFilterLabel('filter-min-obs', 'label-min-obs');
+                if (filters.minObs !== undefined && filters.minObs !== null) {
+                    const parsed = parseInt(filters.minObs, 10);
+                    if (!isNaN(parsed) && parsed >= 1) {
+                        // Threshold only; slider position is derived in syncMinObsSlider
+                        // once the data (and therefore the log scale) is loaded
+                        minObsValue = parsed;
+                    }
                 }
                 if (filters.edgeDays !== undefined) {
                     document.getElementById('filter-edge-days').value = filters.edgeDays;
@@ -1109,7 +1145,7 @@
         // Preserve path highlight if active (will be re-applied in renderMap if still valid)
         const preservedPath = highlightedPath;
         
-        const minObs = parseInt(document.getElementById('filter-min-obs').value) || 1;
+        const minObs = minObsValue || 1;
         const edgeDays = document.getElementById('filter-edge-days').value;
         const nodeDays = document.getElementById('filter-node-days').value;
         const starredOnly = document.getElementById('filter-starred').checked;
@@ -1160,7 +1196,10 @@
             filteredNodeMap[node.prefix] = node;
             if (node.public_key) filteredNodeMapByKey[node.public_key] = node;
         });
-        
+
+        // Live feedback: threshold plus how many edges survive the current filters
+        updateMinObsLabel();
+
         // Re-render current view
         if (currentView === 'map') {
             renderMap();
@@ -1183,13 +1222,6 @@
         loadData().catch(error => console.error('Error reloading for evidence mode:', error));
     }
 
-    // Update filter label
-    function updateFilterLabel(inputId, labelId) {
-        const value = document.getElementById(inputId).value;
-        document.getElementById(labelId).textContent = value;
-        applyFilters();
-    }
-    
     // Switch between views
     function switchView(view) {
         currentView = view;
