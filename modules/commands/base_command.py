@@ -6,6 +6,8 @@ Provides common functionality and interface for command implementations
 
 import re
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Optional
 
@@ -19,6 +21,16 @@ from ..config_schema import LEGACY_ENABLED_ALIASES
 from ..models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD, MeshMessage
 from ..security_utils import validate_pubkey_format
 from ..utils import format_elapsed_display, get_config_timezone
+
+
+# Task-local override for the active translator.  When set (via
+# ``BaseCommand.respond_in_sender_language``), ``translate`` / ``translate_get_value``
+# render against this translator instead of the bot default.  A ContextVar keeps
+# the override isolated to the current asyncio task, so concurrent commands can
+# each answer in a different language without interfering with one another.
+_response_translator: ContextVar[Optional[Any]] = ContextVar(
+    "meshcore_response_translator", default=None
+)
 
 
 class BaseCommand(ABC):
@@ -85,8 +97,9 @@ class BaseCommand(ABC):
         Returns:
             str: Translated string, or key if translation not found.
         """
-        if hasattr(self.bot, 'translator'):
-            return self.bot.translator.translate(key, **kwargs)
+        translator = _response_translator.get() or getattr(self.bot, 'translator', None)
+        if translator is not None:
+            return translator.translate(key, **kwargs)
         # Fallback if translator not available
         return key
 
@@ -99,9 +112,81 @@ class BaseCommand(ABC):
         Returns:
             Any: The value at the key path, or None if not found.
         """
-        if hasattr(self.bot, 'translator'):
-            return self.bot.translator.get_value(key)
+        translator = _response_translator.get() or getattr(self.bot, 'translator', None)
+        if translator is not None:
+            return translator.get_value(key)
         return None
+
+    def detect_response_language(self, message: MeshMessage) -> Optional[str]:
+        """Detect the language to answer ``message`` in, or None to keep default.
+
+        Gated by ``[Localization] auto_detect_language`` (off by default).  Only
+        languages with a translation file on disk are considered, and None is
+        returned when detection matches the bot's current default (no switch
+        needed) or when the feature is disabled / unavailable.
+
+        Args:
+            message: The incoming message to classify.
+
+        Returns:
+            A language code to switch to, or None to use the default translator.
+        """
+        try:
+            if not self.bot.config.getboolean(
+                'Localization', 'auto_detect_language', fallback=False
+            ):
+                return None
+        except (ValueError, AttributeError):
+            return None
+
+        if not getattr(message, 'content', None):
+            return None
+
+        get_translator = getattr(self.bot, 'get_translator', None)
+        available = getattr(self.bot, 'available_languages', None)
+        if get_translator is None or available is None:
+            return None  # bot without caching support (e.g. dummy translator)
+
+        current = getattr(self.bot.translator, 'base_language', None) or getattr(
+            self.bot.translator, 'language', 'en'
+        )
+        try:
+            from ..lang_detector import detect_language
+            text = self._strip_mentions(message.content)
+            detected = detect_language(
+                text, supported=available(), fallback=current
+            )
+        except Exception as e:  # pragma: no cover - detection must never break a reply
+            self.logger.debug(f"Language detection failed: {e}")
+            return None
+
+        return detected if detected != current else None
+
+    @contextmanager
+    def respond_in_sender_language(self, message: MeshMessage):
+        """Context manager that renders ``translate`` calls in the sender's language.
+
+        Detects the message language and, if it differs from the default and has
+        translations available, binds a task-local translator for the duration of
+        the block.  Build the full response string inside the ``with`` block;
+        network I/O (``send_response``) can happen after it.
+
+        Example:
+            with self.respond_in_sender_language(message):
+                response = self.translate('commands.hello.response_format')
+            return await self.send_response(message, response)
+        """
+        lang = self.detect_response_language(message)
+        token = None
+        if lang:
+            translator = self.bot.get_translator(lang)
+            if translator is not None:
+                token = _response_translator.set(translator)
+        try:
+            yield
+        finally:
+            if token is not None:
+                _response_translator.reset(token)
 
     def get_config_value(self, section: str, key: str, fallback: Any = None, value_type: str = 'str') -> Any:
         """Get config value with backward compatibility for section name changes.

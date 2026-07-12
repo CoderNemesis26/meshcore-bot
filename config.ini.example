@@ -322,6 +322,13 @@ language = en
 # Path to translation files directory (relative to bot root)
 # Default: translations/
 translation_path = translations/
+
+# Automatically reply in the language of the incoming message.
+# When enabled, greeting-style commands detect the sender's language (from a
+# built-in keyword list, plus the optional langdetect package for longer text:
+# pip install meshcore-bot[lang]) and respond using the matching translation
+# file, falling back to `language` above when unsure.  Default: false
+auto_detect_language = false
 [Admin_ACL]
 # Admin Access Control List (ACL) for restricted commands
 # Only users with public keys listed here can execute admin commands

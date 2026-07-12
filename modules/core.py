@@ -282,17 +282,25 @@ class MeshCoreBot:
             else:
                 language = 'en'
                 translation_path = 'translations/'
+            self.translation_path = translation_path
+            # Cache of Translator instances keyed by language so per-message
+            # language switching (see get_translator) never re-reads files.
+            self._translator_cache = {}
             self.translator = Translator(language, translation_path)
+            self._translator_cache[language] = self.translator
             self.logger.info(f"Localization initialized: {language}")
         except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as e:
             self.logger.warning(f"Failed to initialize translator: {e}")
             # Create a dummy translator that just returns keys
             class DummyTranslator:
+                language = 'en'
                 def translate(self, key, **kwargs):
                     return key
                 def get_value(self, key):
                     return None
             self.translator = DummyTranslator()
+            self.translation_path = 'translations/'
+            self._translator_cache = {}
 
         # Initialize solar conditions configuration
         set_config(self.config)
@@ -555,6 +563,51 @@ class MeshCoreBot:
                         self.logger.warning(f"Invalid channel rate limit for {key}: {value!r}")
         return ChannelRateLimiter(limits)
 
+    def get_translator(self, language: str):
+        """Return a cached Translator for ``language``, building it on demand.
+
+        Used for per-message language switching so commands can render a reply
+        in the sender's language without re-reading translation files each time
+        or mutating the bot's default ``self.translator``.
+
+        Args:
+            language: Language / locale code (e.g. 'de', 'pt-BR').
+
+        Returns:
+            A Translator for the language, or ``self.translator`` if one cannot
+            be built (e.g. the dummy fallback translator is in use).
+        """
+        if not language:
+            return self.translator
+        cache = getattr(self, '_translator_cache', None)
+        if cache is None:
+            return self.translator
+        cached = cache.get(language)
+        if cached is not None:
+            return cached
+        try:
+            translator = Translator(language, self.translation_path)
+        except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as e:
+            self.logger.warning(f"Failed to build translator for '{language}': {e}")
+            return self.translator
+        cache[language] = translator
+        return translator
+
+    def available_languages(self) -> set:
+        """Return the base language codes that have a translation file on disk.
+
+        Derived from ``translations/*.json`` so language detection only ever
+        targets languages the bot can actually respond in.
+        """
+        langs = set()
+        try:
+            for path in Path(self.translation_path).glob('*.json'):
+                langs.add(path.stem.split('-')[0])
+        except OSError as e:
+            self.logger.debug(f"Could not enumerate translation files: {e}")
+        langs.add('en')  # English is always available as the built-in fallback
+        return langs
+
     def reload_config(self) -> tuple[bool, str]:
         """Reload configuration from file without restarting the bot.
 
@@ -644,7 +697,12 @@ class MeshCoreBot:
                 if (not hasattr(self, 'translator') or
                     getattr(self.translator, 'language', None) != new_language or
                     getattr(self.translator, 'translation_path', None) != new_translation_path):
+                    # Path may have changed; drop cached translators so they are
+                    # rebuilt against the new location on next use.
+                    self.translation_path = new_translation_path
+                    self._translator_cache = {}
                     self.translator = Translator(new_language, new_translation_path)
+                    self._translator_cache[new_language] = self.translator
                     self.logger.info(f"Translator reloaded with language: {new_language}")
 
                     # Reload translated keywords for all commands

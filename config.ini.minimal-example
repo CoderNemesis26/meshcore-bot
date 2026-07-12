@@ -182,6 +182,10 @@ language = en
 # Default: translations/
 translation_path = translations/
 
+# Reply in the sender's language when detectable (default: false).
+# Install the optional detector for longer messages: pip install meshcore-bot[lang]
+auto_detect_language = false
+
 [Admin_ACL]
 # Admin Access Control List (ACL) for restricted commands
 # Only users with public keys listed here can execute admin commands
