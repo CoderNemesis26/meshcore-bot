@@ -312,6 +312,7 @@
                         <span id="heat-legend-min">1</span>
                         <span id="heat-legend-max">1</span>
                     </div>
+                    <div class="heat-legend-note">dots: repeater totals across paths</div>
                 </div>
             </div>
         </div>
@@ -485,6 +486,14 @@
         justify-content: space-between;
         margin-top: 2px;
         color: #6c757d;
+    }
+    .heat-legend-note {
+        margin-top: 2px;
+        font-size: 0.9em;
+        color: #6c757d;
+    }
+    .mesh-dark .heat-legend-note {
+        color: #adb5bd;
     }
     .mesh-dark .heat-legend {
         background: rgba(45, 45, 45, 0.95);
@@ -845,11 +854,66 @@
         return Math.min(1, Math.max(0, (Math.log(obs) - lo) / (hi - lo)));
     }
 
-    function heatColor(edge) {
-        const t = heatT(edge);
-        // On a dark basemap the cold end of viridis (near-black purple) is invisible,
-        // so compress the ramp to start at the still-visible blue-purple
+    // On a dark basemap the cold end of viridis (near-black purple) is invisible,
+    // so compress the ramp to start at the still-visible blue-purple
+    function viridisThemed(t) {
         return getMeshTheme() === 'dark' ? viridisColor(0.25 + 0.75 * t) : viridisColor(t);
+    }
+
+    function heatColor(edge) {
+        return viridisThemed(heatT(edge));
+    }
+
+    // Resolve an edge's endpoints from the filtered set, the same way the renderers do
+    function resolveEdgeEndpoints(edge) {
+        const fromNode = (edge.from_public_key && filteredNodeMapByKey[edge.from_public_key])
+            ? filteredNodeMapByKey[edge.from_public_key]
+            : (filteredNodeMap[edge.from_prefix] || findNodeByEdgePrefix(edge.from_prefix));
+        const toNode = (edge.to_public_key && filteredNodeMapByKey[edge.to_public_key])
+            ? filteredNodeMapByKey[edge.to_public_key]
+            : (filteredNodeMap[edge.to_prefix] || findNodeByEdgePrefix(edge.to_prefix));
+        return { fromNode, toNode };
+    }
+
+    // Per-node aggregates over the filtered edges, recomputed in applyFilters:
+    // degree drives dot size, observation totals drive heat-mode node color.
+    let nodeHeatTotals = new Map(); // nodeId -> sum of observation counts of touching edges
+    let nodeDegrees = new Map();    // nodeId -> number of touching edges
+    let nodeHeatRange = { min: 1, max: 1 };
+
+    function computeNodeStats() {
+        nodeHeatTotals = new Map();
+        nodeDegrees = new Map();
+        filteredEdges.forEach(edge => {
+            const { fromNode, toNode } = resolveEdgeEndpoints(edge);
+            if (!fromNode || !toNode) return;
+            const obs = Math.max(1, edge.observation_count || 1);
+            [fromNode, toNode].forEach(n => {
+                const id = getNodeId(n);
+                nodeHeatTotals.set(id, (nodeHeatTotals.get(id) || 0) + obs);
+                nodeDegrees.set(id, (nodeDegrees.get(id) || 0) + 1);
+            });
+        });
+        let lo = Infinity, hi = 0;
+        nodeHeatTotals.forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; });
+        nodeHeatRange = hi ? { min: lo, max: hi } : { min: 1, max: 1 };
+    }
+
+    // Normalized node heat 0..1: how often this repeater shows up in observed paths
+    function nodeHeatT(node) {
+        const total = nodeHeatTotals.get(getNodeId(node)) || 0;
+        if (!total) return 0;
+        const lo = Math.log(nodeHeatRange.min);
+        const hi = Math.log(nodeHeatRange.max);
+        if (hi <= lo) return 1;
+        return Math.min(1, Math.max(0, (Math.log(total) - lo) / (hi - lo)));
+    }
+
+    function getNodeFillColor(node) {
+        if (edgeColorMode === 'heat') {
+            return viridisThemed(nodeHeatT(node));
+        }
+        return node.role === 'roomserver' ? '#198754' : '#0d6efd';
     }
 
     function updateHeatLegend() {
@@ -1192,7 +1256,7 @@
                 const nodeId = getNodeId(node);
                 const marker = nodeMarkers.get(nodeId);
                 if (marker) {
-                    const highlightSize = getNodeSize(node) + 5;
+                    const highlightSize = getMapNodeSize(node) + 5;
                     const highlightBorderWeight = getBorderWeight(highlightSize, node.is_starred);
                     marker.setStyle({
                         radius: highlightSize,
@@ -1232,7 +1296,7 @@
                     marker.setStyle(originalStyle);
                 } else {
                     // Fallback: restore based on node properties
-                    const normalSize = getNodeSize(node);
+                    const normalSize = getMapNodeSize(node);
                     const normalBorderWeight = getBorderWeight(normalSize, node.is_starred);
                     marker.setStyle({
                         radius: normalSize,
@@ -1513,6 +1577,9 @@
             if (node.public_key) filteredNodeMapByKey[node.public_key] = node;
         });
 
+        // Per-node degree and observation totals for sizing and heat coloring
+        computeNodeStats();
+
         // Live feedback: threshold plus how many edges survive the current filters
         updateMinObsLabel();
 
@@ -1650,6 +1717,8 @@
                 
                 // Preserve highlights when zooming/panning
                 map.on('zoomend', () => {
+                    // Rescale dots/lines for the new zoom before highlights repaint on top
+                    updateMapSizesForZoom();
                     if (highlightedNodeObject) {
                         // Re-apply highlights after zoom using the actual node object
                         highlightNodeConnectionsForNode(highlightedNodeObject);
@@ -1759,7 +1828,7 @@
             if (!fromNode || !toNode) return;
             
             const color = getEdgeColor(edge);
-            const weight = Math.max(1, Math.log10(edge.observation_count) * 2);
+            const weight = getMapEdgeWeight(edge);
             const edgeDistance = getEdgeDistance(edge, fromNode, toNode);
             const evidenceLabel = getEvidenceLabel(edge);
 
@@ -1874,21 +1943,21 @@
             // Normalize to lowercase for consistent matching
             const edgeKey = `${edge.from_prefix.toLowerCase()}-${edge.to_prefix.toLowerCase()}`;
             edgeLines.set(edgeKey, line);
-            // Store the actual node objects this edge connects (not just prefixes)
-            edgeToNodes.set(edgeKey, { fromNode: fromNode, toNode: toNode });
+            // Store the node objects and edge data (edge needed for zoom re-weighting)
+            edgeToNodes.set(edgeKey, { fromNode: fromNode, toNode: toNode, edge: edge });
         });
         
         // Add markers for nodes AFTER edges (so they appear on top and are easier to click)
         filteredNodes.forEach(node => {
-            // Calculate node size based on current filtered edges (this changes when filters change)
-            const nodeSize = getNodeSize(node);
+            // Zoom-scaled size based on current filtered edges (changes with filters/zoom)
+            const nodeSize = getMapNodeSize(node);
             // Calculate border weight that scales with node size
             const borderWeight = getBorderWeight(nodeSize, node.is_starred);
-            
+
             // Create marker with calculated size and border weight
             const marker = L.circleMarker([node.latitude, node.longitude], {
                 radius: nodeSize,
-                fillColor: node.role === 'roomserver' ? '#198754' : '#0d6efd',
+                fillColor: getNodeFillColor(node),
                 color: node.is_starred ? '#ffc107' : '#fff',
                 weight: borderWeight,
                 opacity: 1,
@@ -1956,10 +2025,14 @@
                             <td style="padding: 2px 8px 2px 0; color: #888;"><strong>Connections:</strong></td>
                             <td style="padding: 2px 0;">${connections.length} total (${incoming} incoming, ${outgoing} outgoing)</td>
                         </tr>
+                        <tr>
+                            <td style="padding: 2px 8px 2px 0; color: #888;"><strong>Path Observations:</strong></td>
+                            <td style="padding: 2px 0;">${(nodeHeatTotals.get(getNodeId(node)) || 0).toLocaleString()}</td>
+                        </tr>
                     </table>
                 </div>
             `;
-            
+
             marker.bindPopup(tooltipContent, {
                 maxWidth: 300,
                 className: 'mesh-node-popup',
@@ -2060,7 +2133,7 @@
                     title: `${escapeHtml(node.name)} (${escapeHtml(node.prefix)})`, // Full name in tooltip (rendered as HTML by vis-network)
                     prefix: node.prefix, // Store prefix for reference
                     color: {
-                        background: node.role === 'roomserver' ? '#198754' : '#0d6efd',
+                        background: getNodeFillColor(node),
                         border: node.is_starred ? '#ffc107' : '#fff',
                         highlight: {
                             background: node.role === 'roomserver' ? '#10b981' : '#f59e0b',
@@ -2099,7 +2172,7 @@
                     id: edgeId, // Use unique IDs for edge ID
                     from: fromNodeId, // Use unique node ID
                     to: toNodeId, // Use unique node ID
-                    width: Math.max(1, Math.log10(edge.observation_count) * 2),
+                    width: getEdgeWeight(edge),
                     color: {
                         color: getEdgeColor(edge),
                         opacity: getEdgeOpacity(edge)
@@ -2245,7 +2318,7 @@
                         } else {
                             highlightColor = '#10b981';
                         }
-                        const baseWidth = Math.max(1, Math.log10(edge.observation_count) * 2);
+                        const baseWidth = getEdgeWeight(edge);
                         edgeStyles[edgeId] = {
                             color: {
                                 color: highlightColor,
@@ -2292,7 +2365,7 @@
                             edgeUpdates.push({
                                 id: edgeId,
                                 color: { color: getEdgeColor(originalEdge), opacity: getEdgeOpacity(originalEdge) },
-                                width: Math.max(1, Math.log10(originalEdge.observation_count) * 2)
+                                width: getEdgeWeight(originalEdge)
                             });
                         }
                     }
@@ -2498,7 +2571,7 @@
             
             if (nodeId === clickedNodeId) {
                 // Highlight the clicked node - make it larger
-                const highlightSize = getNodeSize(node) + 3;
+                const highlightSize = getMapNodeSize(node) + 3;
                 const highlightBorderWeight = getBorderWeight(highlightSize, node.is_starred);
                 marker.setStyle({
                     radius: highlightSize,
@@ -2513,7 +2586,7 @@
                     marker.setStyle(originalStyle);
                 } else {
                     // Fallback: restore based on node properties
-                    const nodeSize = getNodeSize(node);
+                    const nodeSize = getMapNodeSize(node);
                     const borderWeight = getBorderWeight(nodeSize, node.is_starred);
                     marker.setStyle({
                         radius: nodeSize,
@@ -2621,7 +2694,7 @@
                 } else {
                     highlightColor = '#10b981'; // Green for incoming
                 }
-                const baseWidth = Math.max(1, Math.log10(edge.observation_count) * 2);
+                const baseWidth = getEdgeWeight(edge);
                 edgeStyles[edgeId] = {
                     color: {
                         color: highlightColor,
@@ -2659,7 +2732,7 @@
             if (!n) return { id: nid, label: '', title: '' };
             const isClicked = nid === clickedNodeId;
             const isLinked = connectedNodeIds.has(nid);
-            const bg = n.role === 'roomserver' ? '#198754' : '#0d6efd';
+            const bg = getNodeFillColor(n);
             const border = n.is_starred ? '#ffc107' : '#fff';
             const hlBg = n.role === 'roomserver' ? '#10b981' : '#f59e0b';
             const label = isLinked
@@ -2709,7 +2782,7 @@
                     marker.setStyle(originalStyle);
                 } else {
                     // Fallback: restore based on node properties
-                    const nodeSize = getNodeSize(node);
+                    const nodeSize = getMapNodeSize(node);
                     const borderWeight = getBorderWeight(nodeSize, node.is_starred);
                     marker.setStyle({
                         radius: nodeSize,
@@ -2755,7 +2828,7 @@
                     edgeUpdates.push({
                         id: edgeId,
                         color: { color: getEdgeColor(originalEdge), opacity: getEdgeOpacity(originalEdge) },
-                        width: Math.max(1, Math.log10(originalEdge.observation_count) * 2)
+                        width: getEdgeWeight(originalEdge)
                     });
                 }
             }
@@ -2767,7 +2840,7 @@
                 if (!node) return { id: nodeId, label: '', font: { size: 12 } };
                 const nodeSize = getNodeSize(node);
                 const borderWidth = getBorderWeight(nodeSize, node.is_starred);
-                const bg = node.role === 'roomserver' ? '#198754' : '#0d6efd';
+                const bg = getNodeFillColor(node);
                 const border = node.is_starred ? '#ffc107' : '#fff';
                 const hlBg = node.role === 'roomserver' ? '#10b981' : '#f59e0b';
                 return {
@@ -2791,13 +2864,65 @@
     
     // Helper functions
     function getNodeSize(node) {
-        // Calculate degree (number of connections) using current filteredEdges
-        // This ensures node size updates when filters change
-        // Prefix-compatible matching so degree counts work when edges and nodes
-        // carry different resolutions (e.g. 4-char edge vs 6-char node prefix)
-        const degree = filteredEdges.filter(e => edgeTouchesNode(e, node)).length;
-        // Base size 6, scale with degree, cap at 16
-        return Math.max(6, Math.min(16, 6 + degree * 0.5));
+        // Degree comes from the per-render aggregates (computeNodeStats), which
+        // resolve endpoints the same way edges are drawn. Base 5, cap 13: large
+        // enough to click, small enough that dense clusters stay readable.
+        const degree = nodeDegrees.get(getNodeId(node)) || 0;
+        return Math.max(5, Math.min(13, 5 + degree * 0.4));
+    }
+
+    // Map dots and lines shrink as you zoom out so dense areas stay readable;
+    // full size from zoom 12 in, floor of 55% at zoom 7 and out.
+    function mapZoomScale() {
+        if (!map) return 1;
+        const z = map.getZoom();
+        if (z >= 12) return 1;
+        if (z <= 7) return 0.55;
+        return 0.55 + (z - 7) * 0.09;
+    }
+
+    function getMapNodeSize(node) {
+        return Math.max(3, getNodeSize(node) * mapZoomScale());
+    }
+
+    // Shared edge width: log-scaled, capped so heavy edges don't blanket dense areas
+    function getEdgeWeight(edge) {
+        return Math.max(1, Math.min(5, Math.log10(Math.max(1, edge.observation_count || 1)) * 1.5));
+    }
+
+    function getMapEdgeWeight(edge) {
+        return Math.max(0.75, getEdgeWeight(edge) * mapZoomScale());
+    }
+
+    // Re-apply zoom-scaled sizes to existing map layers (called on zoomend, before
+    // any active highlight is re-applied on top). Keeps the saved original styles
+    // in sync so highlight restores don't resurrect stale sizes.
+    function updateMapSizesForZoom() {
+        if (!map || currentView !== 'map') return;
+        filteredNodes.forEach(node => {
+            const nodeId = getNodeId(node);
+            const marker = nodeMarkers.get(nodeId);
+            if (!marker) return;
+            const size = getMapNodeSize(node);
+            const weight = getBorderWeight(size, node.is_starred);
+            marker.setStyle({ radius: size, weight: weight });
+            const saved = allNodeStyles.get(nodeId);
+            if (saved) {
+                saved.radius = size;
+                saved.weight = weight;
+            }
+        });
+        edgeToNodes.forEach((entry, edgeKey) => {
+            if (!entry.edge) return;
+            const line = edgeLines.get(edgeKey);
+            if (!line) return;
+            const weight = getMapEdgeWeight(entry.edge);
+            line.setStyle({ weight: weight });
+            const saved = allEdgeStyles.get(edgeKey);
+            if (saved) {
+                saved.weight = weight;
+            }
+        });
     }
     
     // Helper function to calculate border weight based on node size
