@@ -2299,6 +2299,13 @@ class BotDataViewer:
                     'recent_edges_24h': recent_edges
                 }
 
+                # Bot's own position (config [Bot] bot_latitude/bot_longitude), used by
+                # the mesh page to frame the initial map view on the home mesh
+                bot_lat = self.config.getfloat('Bot', 'bot_latitude', fallback=None)
+                bot_lon = self.config.getfloat('Bot', 'bot_longitude', fallback=None)
+                if bot_lat is not None and bot_lon is not None:
+                    stats['bot_location'] = {'latitude': bot_lat, 'longitude': bot_lon}
+
                 return jsonify(stats)
             except Exception as e:
                 self.logger.error(f"Error getting mesh stats: {e}")

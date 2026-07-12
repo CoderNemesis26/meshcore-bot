@@ -916,6 +916,71 @@
         return node.role === 'roomserver' ? '#198754' : '#0d6efd';
     }
 
+    // --- Initial map framing: home mesh component ---
+    // Nodes occasionally carry wrong GPS, and fitting the view to every node can
+    // stretch the initial frame across continents. Instead, frame the component
+    // reachable from the bot's location over multi-byte (provenance-trusted)
+    // evidence edges only; wrong-GPS phantoms are rarely connected to it.
+    let botLocation = null; // {latitude, longitude} from /api/mesh/stats
+
+    function getHomeComponentBounds() {
+        if (!botLocation) return null;
+        // Both evidence modes tag edges, so this works even in "All Evidence"
+        const mbEdges = filteredEdges.filter(e => e.evidence === 'multibyte');
+        if (!mbEdges.length) return null;
+
+        const adj = new Map();      // nodeId -> Set of neighbor nodeIds
+        const nodesById = new Map();
+        mbEdges.forEach(edge => {
+            const { fromNode, toNode } = resolveEdgeEndpoints(edge);
+            if (!fromNode || !toNode) return;
+            const a = getNodeId(fromNode);
+            const b = getNodeId(toNode);
+            nodesById.set(a, fromNode);
+            nodesById.set(b, toNode);
+            if (!adj.has(a)) adj.set(a, new Set());
+            if (!adj.has(b)) adj.set(b, new Set());
+            adj.get(a).add(b);
+            adj.get(b).add(a);
+        });
+
+        // Seeds: multibyte-connected repeaters within 30 km of the bot,
+        // falling back to the single nearest one
+        const seeds = [];
+        let nearestId = null;
+        let nearestKm = Infinity;
+        nodesById.forEach((node, id) => {
+            const d = haversineKm(botLocation.latitude, botLocation.longitude, node.latitude, node.longitude);
+            if (d <= 30) seeds.push(id);
+            if (d < nearestKm) {
+                nearestKm = d;
+                nearestId = id;
+            }
+        });
+        if (!seeds.length && nearestId) seeds.push(nearestId);
+
+        const visited = new Set(seeds);
+        const queue = [...seeds];
+        while (queue.length) {
+            const neighbors = adj.get(queue.pop());
+            if (!neighbors) continue;
+            neighbors.forEach(n => {
+                if (!visited.has(n)) {
+                    visited.add(n);
+                    queue.push(n);
+                }
+            });
+        }
+        if (visited.size < 3) return null; // too small to be the home mesh; use default framing
+
+        const bounds = [];
+        visited.forEach(id => {
+            const n = nodesById.get(id);
+            bounds.push([n.latitude, n.longitude]);
+        });
+        return bounds;
+    }
+
     function updateHeatLegend() {
         const legend = document.getElementById('heat-legend');
         if (!legend) return;
@@ -1361,6 +1426,9 @@
             }
             document.getElementById('stat-avg-obs').textContent = stats.avg_observations || 0;
             document.getElementById('stat-avg-dist').textContent = stats.avg_distance ? stats.avg_distance + ' km' : 'N/A';
+            if (stats.bot_location) {
+                botLocation = stats.bot_location; // used to frame the initial map view
+            }
         } catch (error) {
             console.error('Error loading stats:', error);
         }
@@ -2074,17 +2142,18 @@
         // Note: preservedHighlightedNode was already declared at the start of renderMap()
         highlightedNode = null;
         
-        // Fit to bounds on initial load, otherwise restore previous view state
+        // Fit to bounds on initial load, otherwise restore previous view state.
+        // Prefer the home mesh component (multi-byte connectivity from the bot's
+        // location) so wrong-GPS outliers don't stretch the frame.
         if (isInitialLoad && bounds.length > 0) {
-            // First time rendering with nodes - fit to bounds
-            map.fitBounds(bounds, { padding: [50, 50] });
+            map.fitBounds(getHomeComponentBounds() || bounds, { padding: [50, 50] });
             isInitialMapLoad = false; // Mark that initial load is complete
         } else if (mapViewState) {
             // Subsequent renders - restore previous view state
             map.setView(mapViewState.center, mapViewState.zoom);
         } else if (bounds.length > 0) {
             // Fallback: fit to bounds if no saved state
-            map.fitBounds(bounds, { padding: [50, 50] });
+            map.fitBounds(getHomeComponentBounds() || bounds, { padding: [50, 50] });
         }
         
         // Re-apply highlights immediately after rendering if we had a highlighted node
