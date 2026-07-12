@@ -657,8 +657,28 @@ class BotDataViewer:
 
         @self.app.route('/radio')
         def radio():
-            """Radio settings page"""
-            return render_template('radio.html')
+            """Radio settings page.
+
+            Passes config-governance flags so the Node Settings card doesn't
+            offer device settings the bot itself manages from config.ini.
+            """
+            auto_manage = 'false'
+            bot_name = ''
+            name_managed = False
+            if self.config:
+                auto_manage = self.config.get('Bot', 'auto_manage_contacts', fallback='false').lower()
+                bot_name = (self.config.get('Bot', 'bot_name', fallback='') or '').strip()
+                try:
+                    auto_update_name = self.config.getboolean('Bot', 'auto_update_device_name', fallback=True)
+                except ValueError:
+                    auto_update_name = True
+                name_managed = bool(bot_name) and auto_update_name
+            return render_template(
+                'radio.html',
+                auto_manage_contacts=auto_manage,
+                device_name_managed=name_managed,
+                bot_name=bot_name,
+            )
 
         @self.app.route('/config')
         def config_page():
@@ -3398,7 +3418,7 @@ class BotDataViewer:
 
         @self.app.route('/api/radio/firmware/config/read', methods=['POST'])
         def api_firmware_config_read():
-            """Queue a firmware config read (path.hash.mode + custom vars). Poll /api/channel-operations/<id>."""
+            """Queue a firmware config read (path hash mode). Poll /api/channel-operations/<id>."""
             try:
                 with self.db_manager.connection() as conn:
                     cursor = conn.cursor()
@@ -3414,14 +3434,19 @@ class BotDataViewer:
 
         @self.app.route('/api/radio/firmware/config/write', methods=['POST'])
         def api_firmware_config_write():
-            """Queue a firmware config write. Body: {path_hash_mode?: int, loop_detect?: str}.
+            """Queue a firmware config write. Body: {path_hash_mode: int}.
             Poll /api/channel-operations/<id> for result."""
             try:
                 data = request.get_json(silent=True) or {}
-                allowed = {'path_hash_mode', 'loop_detect'}
+                allowed = {'path_hash_mode'}
                 payload = {k: v for k, v in data.items() if k in allowed}
                 if not payload:
-                    return jsonify({'error': 'No valid fields provided (path_hash_mode, loop_detect)'}), 400
+                    return jsonify({'error': 'No valid fields provided (path_hash_mode)'}), 400
+                if 'path_hash_mode' in payload:
+                    mode = int(payload['path_hash_mode'])
+                    if not (0 <= mode <= 2):
+                        return jsonify({'error': 'path_hash_mode must be 0-2 (bytes per hop = mode + 1)'}), 400
+                    payload['path_hash_mode'] = mode
                 with self.db_manager.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -3453,14 +3478,24 @@ class BotDataViewer:
 
         @self.app.route('/api/radio/params', methods=['POST'])
         def api_radio_params_write():
-            """Queue a radio parameter write. Body: {freq, bw, sf, cr, tx_power}.
+            """Queue a radio/node parameter write. Body may mix: freq/bw/sf/cr
+            (together), tx_power, name, lat/lon (together), adv_loc_policy,
+            multi_acks, telemetry_mode_base/loc/env, and rx_delay/airtime_factor
+            (together). manual_add_contacts is deliberately not writable here —
+            it is owned by [Bot] auto_manage_contacts in config.ini.
             Poll /api/channel-operations/<id> for result."""
             try:
                 data = request.get_json(silent=True) or {}
-                allowed = {'freq', 'bw', 'sf', 'cr', 'tx_power'}
+                allowed = {
+                    'freq', 'bw', 'sf', 'cr', 'tx_power',
+                    'name', 'lat', 'lon', 'adv_loc_policy',
+                    'multi_acks',
+                    'telemetry_mode_base', 'telemetry_mode_loc', 'telemetry_mode_env',
+                    'rx_delay', 'airtime_factor',
+                }
                 payload = {k: v for k, v in data.items() if k in allowed}
                 if not payload:
-                    return jsonify({'error': 'No valid fields (freq, bw, sf, cr, tx_power)'}), 400
+                    return jsonify({'error': f"No valid fields (expected one of: {', '.join(sorted(allowed))})"}), 400
 
                 if 'freq' in payload:
                     freq = float(payload['freq'])
@@ -3487,6 +3522,49 @@ class BotDataViewer:
                     if not (1 <= tx <= 30):
                         return jsonify({'error': 'tx_power must be 1–30 dBm'}), 400
                     payload['tx_power'] = tx
+                if 'name' in payload:
+                    name = str(payload['name']).strip()
+                    if not name or len(name.encode('utf-8')) > 32:
+                        return jsonify({'error': 'name must be 1–32 bytes'}), 400
+                    payload['name'] = name
+                if ('lat' in payload) != ('lon' in payload):
+                    return jsonify({'error': 'lat and lon must be provided together'}), 400
+                if 'lat' in payload:
+                    lat = float(payload['lat'])
+                    lon = float(payload['lon'])
+                    if not (-90.0 <= lat <= 90.0):
+                        return jsonify({'error': 'lat must be -90 to 90'}), 400
+                    if not (-180.0 <= lon <= 180.0):
+                        return jsonify({'error': 'lon must be -180 to 180'}), 400
+                    payload['lat'] = lat
+                    payload['lon'] = lon
+                if 'adv_loc_policy' in payload:
+                    policy = int(payload['adv_loc_policy'])
+                    if policy not in (0, 1):
+                        return jsonify({'error': 'adv_loc_policy must be 0 (private) or 1 (share)'}), 400
+                    payload['adv_loc_policy'] = policy
+                if 'multi_acks' in payload:
+                    acks = int(payload['multi_acks'])
+                    if not (0 <= acks <= 3):
+                        return jsonify({'error': 'multi_acks must be 0–3'}), 400
+                    payload['multi_acks'] = acks
+                for telem_key in ('telemetry_mode_base', 'telemetry_mode_loc', 'telemetry_mode_env'):
+                    if telem_key in payload:
+                        mode = int(payload[telem_key])
+                        if not (0 <= mode <= 2):
+                            return jsonify({'error': f'{telem_key} must be 0 (deny), 1 (per-contact), or 2 (allow all)'}), 400
+                        payload[telem_key] = mode
+                if ('rx_delay' in payload) != ('airtime_factor' in payload):
+                    return jsonify({'error': 'rx_delay and airtime_factor must be provided together'}), 400
+                if 'rx_delay' in payload:
+                    rx_delay = float(payload['rx_delay'])
+                    airtime_factor = float(payload['airtime_factor'])
+                    if not (0.0 <= rx_delay <= 20.0):
+                        return jsonify({'error': 'rx_delay must be 0–20 seconds'}), 400
+                    if not (0.0 <= airtime_factor <= 9.0):
+                        return jsonify({'error': 'airtime_factor must be 0–9'}), 400
+                    payload['rx_delay'] = rx_delay
+                    payload['airtime_factor'] = airtime_factor
 
                 radio_fields = {'freq', 'bw', 'sf', 'cr'}
                 if radio_fields & set(payload) and not radio_fields <= set(payload):
@@ -3503,6 +3581,28 @@ class BotDataViewer:
                 return jsonify({'success': True, 'operation_id': op_id})
             except Exception as e:
                 self.logger.error(f"Error queuing radio params write: {e}")
+                return jsonify({'error': str(e)}), 500
+
+        @self.app.route('/api/radio/advert', methods=['POST'])
+        def api_radio_advert():
+            """Queue a self-advertisement. Body: {flood: bool} (default false =
+            zero-hop). Poll /api/channel-operations/<id> for result."""
+            try:
+                data = request.get_json(silent=True) or {}
+                flood = data.get('flood', False)
+                if not isinstance(flood, bool):
+                    return jsonify({'error': 'flood must be true or false'}), 400
+                with self.db_manager.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO channel_operations (operation_type, payload_data, status) VALUES ('radio_advert', ?, 'pending')",
+                        (json.dumps({'flood': flood}),)
+                    )
+                    conn.commit()
+                    op_id = cursor.lastrowid
+                return jsonify({'success': True, 'operation_id': op_id})
+            except Exception as e:
+                self.logger.error(f"Error queuing radio advert: {e}")
                 return jsonify({'error': str(e)}), 500
 
     def _setup_socketio_handlers(self):

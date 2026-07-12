@@ -883,6 +883,169 @@ class TestApiRadioStatus:
 
 
 # ---------------------------------------------------------------------------
+# api_radio_params / api_radio_advert / firmware config
+# ---------------------------------------------------------------------------
+
+
+def _queued_operation(viewer, op_id):
+    with viewer.db_manager.connection() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT operation_type, payload_data, status FROM channel_operations WHERE id = ?",
+            (op_id,),
+        ).fetchone()
+    return row
+
+
+class TestApiRadioParams:
+    def test_read_queues_operation(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.get('/api/radio/params')
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            row = _queued_operation(viewer_with_db, data['operation_id'])
+            assert row['operation_type'] == 'radio_params_read'
+            assert row['status'] == 'pending'
+
+    def test_write_node_settings_queues_operation(self, viewer_with_db):
+        payload = {
+            'name': 'TestBot',
+            'lat': 47.6,
+            'lon': -122.3,
+            'adv_loc_policy': 1,
+            'multi_acks': 1,
+            'telemetry_mode_base': 2,
+            'telemetry_mode_loc': 0,
+            'telemetry_mode_env': 1,
+            'rx_delay': 2.5,
+            'airtime_factor': 1.0,
+        }
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json=payload)
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            row = _queued_operation(viewer_with_db, data['operation_id'])
+            assert row['operation_type'] == 'radio_params_write'
+            assert json.loads(row['payload_data']) == payload
+
+    def test_write_rejects_unknown_only_fields(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'bogus': 1})
+            assert response.status_code == 400
+
+    def test_write_rejects_long_name(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'name': 'x' * 33})
+            assert response.status_code == 400
+
+    def test_write_rejects_lat_without_lon(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'lat': 47.6})
+            assert response.status_code == 400
+
+    def test_write_rejects_out_of_range_lat(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'lat': 91.0, 'lon': 0.0})
+            assert response.status_code == 400
+
+    def test_write_rejects_bad_adv_loc_policy(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'adv_loc_policy': 2})
+            assert response.status_code == 400
+
+    def test_write_rejects_manual_add_contacts(self, viewer_with_db):
+        """manual_add_contacts is owned by [Bot] auto_manage_contacts, not this API."""
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'manual_add_contacts': True})
+            assert response.status_code == 400
+
+    def test_write_drops_manual_add_contacts_from_mixed_payload(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post(
+                '/api/radio/params',
+                json={'manual_add_contacts': True, 'multi_acks': 1},
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            row = _queued_operation(viewer_with_db, data['operation_id'])
+            assert json.loads(row['payload_data']) == {'multi_acks': 1}
+
+    def test_write_rejects_bad_multi_acks(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'multi_acks': 4})
+            assert response.status_code == 400
+
+    def test_write_rejects_bad_telemetry_mode(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'telemetry_mode_base': 3})
+            assert response.status_code == 400
+
+    def test_write_rejects_rx_delay_without_airtime_factor(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/params', json={'rx_delay': 1.0})
+            assert response.status_code == 400
+
+    def test_write_rejects_out_of_range_tuning(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post(
+                '/api/radio/params', json={'rx_delay': 21.0, 'airtime_factor': 1.0}
+            )
+            assert response.status_code == 400
+
+
+class TestApiRadioAdvert:
+    def test_advert_queues_operation(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/advert', json={'flood': True})
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            row = _queued_operation(viewer_with_db, data['operation_id'])
+            assert row['operation_type'] == 'radio_advert'
+            assert json.loads(row['payload_data']) == {'flood': True}
+
+    def test_advert_defaults_to_zero_hop(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/advert', json={})
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            row = _queued_operation(viewer_with_db, data['operation_id'])
+            assert json.loads(row['payload_data']) == {'flood': False}
+
+    def test_advert_rejects_non_bool_flood(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post('/api/radio/advert', json={'flood': 'yes'})
+            assert response.status_code == 400
+
+
+class TestApiFirmwareConfig:
+    def test_write_rejects_loop_detect(self, viewer_with_db):
+        """loop.detect is repeater/room-server CLI config, not a companion setting."""
+        with viewer_with_db.app.test_client() as client:
+            response = client.post(
+                '/api/radio/firmware/config/write', json={'loop_detect': 'on'}
+            )
+            assert response.status_code == 400
+
+    def test_write_rejects_out_of_range_path_hash_mode(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post(
+                '/api/radio/firmware/config/write', json={'path_hash_mode': 3}
+            )
+            assert response.status_code == 400
+
+    def test_write_accepts_valid_path_hash_mode(self, viewer_with_db):
+        with viewer_with_db.app.test_client() as client:
+            response = client.post(
+                '/api/radio/firmware/config/write', json={'path_hash_mode': 1}
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            row = _queued_operation(viewer_with_db, data['operation_id'])
+            assert row['operation_type'] == 'firmware_write'
+            assert json.loads(row['payload_data']) == {'path_hash_mode': 1}
+
+
+# ---------------------------------------------------------------------------
 # api_explorer
 # ---------------------------------------------------------------------------
 
