@@ -975,6 +975,40 @@ class TestApiContacts:
             assert 'tracking_data' in data
             assert 'server_stats' in data
 
+    def test_contact_badge_multibyte_chunks_are_cached_and_invalidated(
+        self, viewer_with_db
+    ):
+        with viewer_with_db._with_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO observed_paths
+                    (public_key, from_prefix, to_prefix, path_hex, path_length,
+                     bytes_per_hop, packet_type)
+                VALUES (?, ?, ?, ?, ?, ?, 'advert')
+                """,
+                ("aa" * 32, "aabb", "ccdd", "aabbccdd", 4, 2),
+            )
+            conn.commit()
+            cursor = conn.cursor()
+            first = viewer_with_db._get_cached_contact_multibyte_hop_chunks(cursor)
+            second = viewer_with_db._get_cached_contact_multibyte_hop_chunks(cursor)
+            assert first is second
+            assert {"aabb", "ccdd"}.issubset(first)
+
+            conn.execute(
+                """
+                INSERT INTO observed_paths
+                    (public_key, from_prefix, to_prefix, path_hex, path_length,
+                     bytes_per_hop, packet_type)
+                VALUES (?, ?, ?, ?, ?, ?, 'advert')
+                """,
+                ("bb" * 32, "112233", "445566", "112233445566", 6, 3),
+            )
+            conn.commit()
+            third = viewer_with_db._get_cached_contact_multibyte_hop_chunks(cursor)
+            assert third is not first
+            assert {"112233", "445566"}.issubset(third)
+
 
 # ---------------------------------------------------------------------------
 # api_channel_*

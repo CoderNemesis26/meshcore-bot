@@ -496,6 +496,18 @@
             <div class="d-md-none" id="contacts-mobile-stack" aria-live="polite">
                 <div class="loading text-center py-3">Loading contacts data...</div>
             </div>
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3"
+                 id="contacts-pagination" aria-label="Contacts pagination">
+                <small class="text-muted" id="contacts-page-summary">Loading contacts…</small>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Contact pages">
+                    <button type="button" class="btn btn-outline-secondary" id="contacts-page-previous" disabled>
+                        <i class="fas fa-chevron-left" aria-hidden="true"></i> Previous
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" id="contacts-page-next" disabled>
+                        Next <i class="fas fa-chevron-right" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
         </div>
         </div>
     </div>
@@ -540,12 +552,22 @@
         <script nonce="{{ g.csp_nonce }}">
 class ModernContactsManager {
     constructor() {
-        this.contactsData = [];
+        this.contactsData = { tracking_data: [], server_stats: {} };
         this.filteredData = [];
         this.selectedContactIds = new Set();
         this.searchTerm = '';
         this.sortColumn = 'last_seen';
         this.sortDirection = 'desc';
+        this.currentPage = 1;
+        this.pageSize = 100;
+        this.pagination = {
+            page: 1, page_size: 100, total_items: 0, total_pages: 1,
+            has_previous: false, has_next: false,
+        };
+        this.filteredStats = {};
+        this.requestController = null;
+        this.searchTimer = null;
+        this.mobileLayout = window.matchMedia('(max-width: 767.98px)');
         this.activityChart = null; // Chart.js instance for activity trends
         this.initializeContacts();
     }
@@ -558,20 +580,36 @@ class ModernContactsManager {
             el.value = (savedTimespan && valid.includes(savedTimespan)) ? savedTimespan : '30d';
         }
         this.syncContactsTimespanMobileUI();
-        await this.loadContactsData();
         this.setupEventHandlers();
-        this.applySort();
-        this.updateSortIcons();
-        this.renderContactsData();
         const toolbarWrap = document.querySelector('.contacts-toolbar-filters-wrap');
         if (toolbarWrap) this.initContactsDropdowns(toolbarWrap);
-        this.updateStatistics();
+        if (this.mobileLayout.addEventListener) {
+            this.mobileLayout.addEventListener('change', () => this.renderContactsData());
+        }
+        await this.loadContactsData();
     }
     
-    async loadContactsData() {
+    async loadContactsData({ resetPage = false, clearSelection = false } = {}) {
+        if (resetPage) this.currentPage = 1;
+        if (clearSelection) this.selectedContactIds.clear();
+        if (this.requestController) this.requestController.abort();
+        const controller = new AbortController();
+        this.requestController = controller;
+        this.setLoadingState(true);
         try {
             const since = document.getElementById('contacts-timespan').value || '30d';
-            const response = await fetch('/api/contacts?since=' + encodeURIComponent(since));
+            const params = new URLSearchParams({
+                since,
+                page: String(this.currentPage),
+                page_size: String(this.pageSize),
+                search: this.searchTerm,
+                sort: this.sortColumn,
+                direction: this.sortDirection,
+            });
+            const response = await fetch('/api/contacts?' + params.toString(), {
+                signal: controller.signal,
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             
             if (data.error) {
@@ -584,11 +622,45 @@ class ModernContactsManager {
                 server_stats: data.server_stats || {}
             };
             this.filteredData = [...this.contactsData.tracking_data];
-            this.selectedContactIds.clear();
+            this.pagination = data.pagination || {
+                page: 1,
+                page_size: this.filteredData.length || this.pageSize,
+                total_items: this.filteredData.length,
+                total_pages: 1,
+                has_previous: false,
+                has_next: false,
+            };
+            this.currentPage = this.pagination.page;
+            this.filteredStats = data.filtered_stats || {};
+            this.updateSortIcons();
+            this.renderContactsData();
+            this.updatePagination();
+            this.updateStatistics();
             
         } catch (error) {
+            if (error.name === 'AbortError') return;
             console.error('Error loading contacts data:', error);
             this.showError('Failed to load contacts data: ' + error.message);
+        } finally {
+            if (this.requestController === controller) {
+                this.requestController = null;
+                this.setLoadingState(false);
+            }
+        }
+    }
+
+    setLoadingState(loading) {
+        const refresh = document.getElementById('refresh-contacts');
+        if (refresh) refresh.disabled = loading;
+        const summary = document.getElementById('contacts-page-summary');
+        if (loading && summary) summary.textContent = 'Loading contacts…';
+        const previous = document.getElementById('contacts-page-previous');
+        const next = document.getElementById('contacts-page-next');
+        if (loading) {
+            if (previous) previous.disabled = true;
+            if (next) next.disabled = true;
+        } else {
+            this.updatePagination();
         }
     }
     
@@ -602,32 +674,22 @@ class ModernContactsManager {
         document.getElementById('contacts-list-multibyte-badge-info')
             ?.addEventListener('click', event => event.stopPropagation());
         document.getElementById('refresh-contacts').addEventListener('click', () => {
-            this.loadContactsData().then(() => {
-                this.applySearch();
-                this.applySort();
-                this.renderContactsData();
-                this.updateStatistics();
-            });
+            this.loadContactsData();
         });
         
         document.getElementById('search-contacts').addEventListener('input', (e) => {
             this.searchTerm = e.target.value.toLowerCase().trim();
-            this.applySearch();
-            this.applySort();
-            this.renderContactsData();
-            this.updateStatistics();
+            window.clearTimeout(this.searchTimer);
+            this.searchTimer = window.setTimeout(() => {
+                this.loadContactsData({ resetPage: true, clearSelection: true });
+            }, 300);
         });
         
         document.getElementById('contacts-timespan').addEventListener('change', () => {
             const since = document.getElementById('contacts-timespan').value;
             localStorage.setItem('contactsTimespan', since);
             this.syncContactsTimespanMobileUI();
-            this.loadContactsData().then(() => {
-                this.applySearch();
-                this.applySort();
-                this.renderContactsData();
-                this.updateStatistics();
-            });
+            this.loadContactsData({ resetPage: true, clearSelection: true });
         });
 
         const mobileTimespanMenu = document.getElementById('contacts-timespan-mobile-menu');
@@ -691,9 +753,8 @@ class ModernContactsManager {
                 if (v.length === 2) {
                     this.sortColumn = v[0];
                     this.sortDirection = v[1];
-                    this.applySort();
-                    this.renderContactsData();
                     this.updateSortIcons();
+                    this.loadContactsData({ resetPage: true, clearSelection: true });
                 }
             });
         }
@@ -703,10 +764,20 @@ class ModernContactsManager {
             header.addEventListener('click', () => {
                 const column = header.dataset.sort;
                 this.setSort(column);
-                this.applySort();
-                this.renderContactsData();
                 this.updateSortIcons();
+                this.loadContactsData({ resetPage: true, clearSelection: true });
             });
+        });
+
+        document.getElementById('contacts-page-previous').addEventListener('click', () => {
+            if (!this.pagination.has_previous) return;
+            this.currentPage -= 1;
+            this.loadContactsData();
+        });
+        document.getElementById('contacts-page-next').addEventListener('click', () => {
+            if (!this.pagination.has_next) return;
+            this.currentPage += 1;
+            this.loadContactsData();
         });
     }
     
@@ -718,75 +789,6 @@ class ModernContactsManager {
             // New column, default to ascending
             this.sortColumn = column;
             this.sortDirection = 'asc';
-        }
-    }
-    
-    applySort() {
-        this.filteredData.sort((a, b) => {
-            let aValue = this.getSortValue(a, this.sortColumn);
-            let bValue = this.getSortValue(b, this.sortColumn);
-            
-            // Handle null/undefined values
-            if (aValue === null || aValue === undefined) aValue = '';
-            if (bValue === null || bValue === undefined) bValue = '';
-            
-            // Handle different data types
-            if (this.sortColumn === 'last_seen' || this.sortColumn === 'first_heard') {
-                // Date sorting
-                aValue = new Date(aValue);
-                bValue = new Date(bValue);
-            } else if (this.sortColumn === 'snr' || this.sortColumn === 'hop_count' || this.sortColumn === 'advert_count' || this.sortColumn === 'distance') {
-                // Numeric sorting
-                aValue = parseFloat(aValue) || 0;
-                bValue = parseFloat(bValue) || 0;
-            } else {
-                // String sorting
-                aValue = String(aValue).toLowerCase();
-                bValue = String(bValue).toLowerCase();
-            }
-            
-            let comparison = 0;
-            if (aValue < bValue) comparison = -1;
-            else if (aValue > bValue) comparison = 1;
-            
-            return this.sortDirection === 'desc' ? -comparison : comparison;
-        });
-    }
-    
-    getSortValue(contact, column) {
-        switch (column) {
-            case 'username':
-                return contact.username || '';
-            case 'device_type':
-                return contact.device_type || '';
-            case 'location':
-                return this.getLocationString(contact);
-            case 'snr':
-                return contact.snr;
-            case 'hop_count':
-                return contact.hop_count;
-            case 'first_heard':
-                return contact.first_heard;
-            case 'last_seen':
-                return contact.last_seen;
-            case 'advert_count':
-                return contact.advert_count;
-            case 'distance':
-                return contact.distance || 0;
-            default:
-                return '';
-        }
-    }
-    
-    getLocationString(contact) {
-        if (contact.city && contact.state) {
-            return `${this.escapeHtml(contact.city)}, ${this.escapeHtml(contact.state)}`;
-        } else if (contact.city) {
-            return this.escapeHtml(contact.city);
-        } else if (contact.latitude && contact.longitude) {
-            return `${contact.latitude}, ${contact.longitude}`;
-        } else {
-            return '';
         }
     }
     
@@ -850,36 +852,6 @@ class ModernContactsManager {
                     strategy: 'fixed',
                 },
             });
-        });
-    }
-    
-    applySearch() {
-        if (!this.searchTerm) {
-            this.filteredData = [...this.contactsData.tracking_data];
-            return;
-        }
-        
-        this.filteredData = this.contactsData.tracking_data.filter(contact => {
-            // Search in all text fields (case-insensitive)
-            const searchableFields = [
-                contact.username || '',
-                contact.role || '',
-                contact.device_type || '',
-                contact.city || '',
-                contact.state || '',
-                contact.country || ''
-            ];
-            
-            // For public key, only match from the beginning
-            const publicKey = contact.user_id || '';
-            const publicKeyMatch = publicKey.toLowerCase().startsWith(this.searchTerm);
-            
-            // For other fields, match anywhere in the string
-            const otherFieldsMatch = searchableFields.some(field => 
-                field.toLowerCase().includes(this.searchTerm)
-            );
-            
-            return publicKeyMatch || otherFieldsMatch;
         });
     }
     
@@ -963,7 +935,8 @@ class ModernContactsManager {
             return;
         }
 
-        tbody.innerHTML = this.filteredData.map((contact, contactIndex) => `
+        if (!this.mobileLayout.matches) {
+            tbody.innerHTML = this.filteredData.map((contact, contactIndex) => `
             <tr>
                 <td class="text-center align-middle">
                     <input type="checkbox" class="form-check-input contact-row-checkbox" data-contact-index="${contactIndex}" ${this.selectedContactIds.has(contact.user_id) ? 'checked' : ''}>
@@ -1001,9 +974,10 @@ class ModernContactsManager {
                     </div>
                 </td>
             </tr>
-        `).join('');
-
-        if (mobileStack) {
+            `).join('');
+            if (mobileStack) mobileStack.replaceChildren();
+        } else if (mobileStack) {
+            tbody.replaceChildren();
             mobileStack.innerHTML = this.filteredData.map((contact, contactIndex) => this.renderContactCardHtml(contact, contactIndex)).join('');
         }
 
@@ -1011,9 +985,27 @@ class ModernContactsManager {
         this.setupPathTooltips();
         this.updateBulkDeleteButton();
         this.updateSelectAllCheckbox();
-        if (mobileStack) {
+        if (mobileStack && this.mobileLayout.matches) {
             this.initContactsDropdowns(mobileStack);
         }
+    }
+
+    updatePagination() {
+        const summary = document.getElementById('contacts-page-summary');
+        const previous = document.getElementById('contacts-page-previous');
+        const next = document.getElementById('contacts-page-next');
+        const total = Number(this.pagination.total_items) || 0;
+        const pageSize = Number(this.pagination.page_size) || this.pageSize;
+        const page = Number(this.pagination.page) || 1;
+        const start = total === 0 ? 0 : ((page - 1) * pageSize) + 1;
+        const end = Math.min(total, start + this.filteredData.length - 1);
+        if (summary) {
+            summary.textContent = total === 0
+                ? 'No contacts'
+                : `${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()} contacts`;
+        }
+        if (previous) previous.disabled = !this.pagination.has_previous;
+        if (next) next.disabled = !this.pagination.has_next;
     }
     
     updateBulkDeleteButton() {
@@ -1052,17 +1044,17 @@ class ModernContactsManager {
         const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
         
         // Calculate time-based metrics
-        const contacts24h = this.filteredData.filter(contact => {
+        const contacts24h = this.filteredStats.contacts_24h ?? this.filteredData.filter(contact => {
             const lastSeen = new Date(contact.last_seen);
             return lastSeen >= oneDayAgo;
         }).length;
         
-        const contacts7d = this.filteredData.filter(contact => {
+        const contacts7d = this.filteredStats.contacts_7d ?? this.filteredData.filter(contact => {
             const lastSeen = new Date(contact.last_seen);
             return lastSeen >= oneWeekAgo;
         }).length;
         
-        const contactsAll = this.filteredData.length;
+        const contactsAll = this.filteredStats.contacts_total ?? this.filteredData.length;
         
         // Calculate advertisement metrics using daily tracking data
         // Note: These should now be provided by the server from the daily_advertisements table
@@ -1111,7 +1103,7 @@ class ModernContactsManager {
         console.log('Sample new device:', anyNewDevices[0]);
         
         // Try different possible device type values
-        const newCompanions = this.filteredData.filter(contact => {
+        const newCompanions = this.filteredStats.new_companions ?? this.filteredData.filter(contact => {
             const firstHeard = new Date(contact.first_heard);
             const deviceType = (contact.device_type || '').toLowerCase();
             return firstHeard >= oneWeekAgo && (
@@ -1121,7 +1113,7 @@ class ModernContactsManager {
             );
         }).length;
         
-        const newRepeaters = this.filteredData.filter(contact => {
+        const newRepeaters = this.filteredStats.new_repeaters ?? this.filteredData.filter(contact => {
             const firstHeard = new Date(contact.first_heard);
             const deviceType = (contact.device_type || '').toLowerCase();
             return firstHeard >= oneWeekAgo && (
@@ -1131,7 +1123,7 @@ class ModernContactsManager {
             );
         }).length;
         
-        const newRoomServers = this.filteredData.filter(contact => {
+        const newRoomServers = this.filteredStats.new_room_servers ?? this.filteredData.filter(contact => {
             const firstHeard = new Date(contact.first_heard);
             const deviceType = (contact.device_type || '').toLowerCase();
             return firstHeard >= oneWeekAgo && (
@@ -2325,13 +2317,8 @@ class ModernContactsManager {
                 modal.hide();
             }
             
-            // Remove contact from local data
-            this.contactsData.tracking_data = this.contactsData.tracking_data.filter(c => c.user_id !== userId);
-            this.filteredData = this.filteredData.filter(c => c.user_id !== userId);
-            
-            // Re-render the table
-            this.renderContactsData();
-            this.updateStatistics();
+            this.selectedContactIds.delete(userId);
+            await this.loadContactsData();
             
             // Show success message
             this.showSuccess(`Contact "${this.escapeHtml(username || 'Unknown')}" has been deleted successfully.`);
@@ -2445,14 +2432,8 @@ class ModernContactsManager {
             const modal = bootstrap.Modal.getInstance(modalElement);
             if (modal) modal.hide();
             
-            toDelete.forEach(userId => {
-                this.contactsData.tracking_data = this.contactsData.tracking_data.filter(c => c.user_id !== userId);
-                this.filteredData = this.filteredData.filter(c => c.user_id !== userId);
-                this.selectedContactIds.delete(userId);
-            });
-            
-            this.renderContactsData();
-            this.updateStatistics();
+            toDelete.forEach(userId => this.selectedContactIds.delete(userId));
+            await this.loadContactsData();
             
             if (failCount === 0) {
                 this.showSuccess(`${successCount} contact${successCount !== 1 ? 's' : ''} deleted successfully.`);

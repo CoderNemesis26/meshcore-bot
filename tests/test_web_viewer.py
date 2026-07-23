@@ -353,6 +353,7 @@ class TestContactRoutes:
         assert resp.status_code == 200
         data = resp.get_json()
         assert isinstance(data, dict)
+        assert "pagination" not in data
 
     def test_api_contacts_since_7d(self, client):
         resp = client.get("/api/contacts?since=7d")
@@ -365,6 +366,307 @@ class TestContactRoutes:
     def test_api_contacts_invalid_since_uses_default(self, client):
         resp = client.get("/api/contacts?since=forever")
         assert resp.status_code == 200
+
+    def test_api_contacts_paginates_searches_and_sorts(self, client, viewer):
+        contacts = [
+            ("f001" * 16, "PerfContact Charlie"),
+            ("f002" * 16, "PerfContact Alpha"),
+            ("f003" * 16, "PerfContact Bravo"),
+        ]
+        for public_key, name in contacts:
+            _insert_contact(viewer, public_key, name)
+
+        first = client.get(
+            "/api/contacts?since=all&page=1&page_size=2&search=PerfContact"
+            "&sort=username&direction=asc"
+        ).get_json()
+        assert "filtered_stats" in first
+        assert first["pagination"] == {
+            "page": 1,
+            "page_size": 2,
+            "total_items": 3,
+            "total_pages": 2,
+            "has_previous": False,
+            "has_next": True,
+        }
+        assert [row["username"] for row in first["tracking_data"]] == [
+            "PerfContact Alpha",
+            "PerfContact Bravo",
+        ]
+
+        second = client.get(
+            "/api/contacts?since=all&page=2&page_size=2&search=PerfContact"
+            "&sort=username&direction=asc"
+        ).get_json()
+        assert [row["username"] for row in second["tracking_data"]] == [
+            "PerfContact Charlie"
+        ]
+        assert second["pagination"]["has_previous"] is True
+        assert second["pagination"]["has_next"] is False
+
+    def test_api_contacts_caps_page_size_and_normalizes_sort(self, client):
+        data = client.get(
+            "/api/contacts?page=not-a-number&page_size=9999&sort=not-a-column"
+            "&direction=not-a-direction"
+        ).get_json()
+        assert data["pagination"]["page"] == 1
+        assert data["pagination"]["page_size"] == 200
+
+    @pytest.mark.parametrize(
+        ("sort", "ascending_names"),
+        [
+            ("username", ["SortMatrix A", "SortMatrix B", "SortMatrix C"]),
+            ("device_type", ["SortMatrix B", "SortMatrix C", "SortMatrix A"]),
+            ("location", ["SortMatrix B", "SortMatrix C", "SortMatrix A"]),
+            ("distance", ["SortMatrix A", "SortMatrix C", "SortMatrix B"]),
+            ("snr", ["SortMatrix B", "SortMatrix C", "SortMatrix A"]),
+            ("hop_count", ["SortMatrix B", "SortMatrix C", "SortMatrix A"]),
+            ("first_heard", ["SortMatrix B", "SortMatrix C", "SortMatrix A"]),
+            ("last_seen", ["SortMatrix C", "SortMatrix A", "SortMatrix B"]),
+            ("advert_count", ["SortMatrix B", "SortMatrix C", "SortMatrix A"]),
+        ],
+    )
+    @pytest.mark.parametrize("direction", ["asc", "desc"])
+    def test_api_contacts_preserves_global_sort_semantics(
+        self, client, viewer, monkeypatch, sort, ascending_names, direction
+    ):
+        with closing(sqlite3.connect(viewer.db_path)) as conn:
+            conn.execute(
+                "DELETE FROM complete_contact_tracking WHERE name LIKE 'SortMatrix %'"
+            )
+            conn.commit()
+
+        rows = [
+            (
+                "d101" * 16, "SortMatrix A", "Zulu", "Zurich", 30.0, 3,
+                "2026-01-03 00:00:00", "2026-02-02 00:00:00", 30, 0.1, 0.0,
+            ),
+            (
+                "d102" * 16, "SortMatrix B", "Alpha", "Austin", 10.0, 1,
+                "2026-01-01 00:00:00", "2026-02-03 00:00:00", 10, 2.0, 0.0,
+            ),
+            (
+                "d103" * 16, "SortMatrix C", "Middle", "Boston", 20.0, 2,
+                "2026-01-02 00:00:00", "2026-02-01 00:00:00", 20, 1.0, 0.0,
+            ),
+        ]
+        for row in rows:
+            _insert_contact(viewer, row[0], row[1])
+        with closing(sqlite3.connect(viewer.db_path)) as conn:
+            for row in rows:
+                conn.execute(
+                    """
+                    UPDATE complete_contact_tracking
+                    SET device_type = ?, city = ?, snr = ?, hop_count = ?,
+                        first_heard = ?, last_heard = ?, advert_count = ?,
+                        latitude = ?, longitude = ?
+                    WHERE public_key = ?
+                    """,
+                    (*row[2:], row[0]),
+                )
+            conn.commit()
+
+        original_getfloat = viewer.config.getfloat
+
+        def getfloat(section, option, *, fallback=None):
+            if section == "Bot" and option in {"bot_latitude", "bot_longitude"}:
+                return 0.0
+            return original_getfloat(section, option, fallback=fallback)
+
+        monkeypatch.setattr(viewer.config, "getfloat", getfloat)
+        data = client.get(
+            "/api/contacts",
+            query_string={
+                "since": "all",
+                "page": 1,
+                "page_size": 10,
+                "search": "SortMatrix",
+                "sort": sort,
+                "direction": direction,
+            },
+        ).get_json()
+        expected = ascending_names if direction == "asc" else list(reversed(ascending_names))
+        assert [row["username"] for row in data["tracking_data"]] == expected
+
+    @pytest.mark.parametrize("sort", ["location", "distance", "snr", "hop_count"])
+    def test_api_contacts_sorts_missing_values_as_zero_or_empty(
+        self, client, viewer, monkeypatch, sort
+    ):
+        original_getfloat = viewer.config.getfloat
+
+        def getfloat(section, option, *, fallback=None):
+            if section == "Bot" and option in {"bot_latitude", "bot_longitude"}:
+                return 0.0
+            return original_getfloat(section, option, fallback=fallback)
+
+        monkeypatch.setattr(viewer.config, "getfloat", getfloat)
+
+        with closing(sqlite3.connect(viewer.db_path)) as conn:
+            conn.execute(
+                "DELETE FROM complete_contact_tracking WHERE name LIKE 'SortNull %'"
+            )
+            conn.commit()
+
+        rows = [
+            ("d201" * 16, "SortNull Missing", None, None, None, None),
+            ("d202" * 16, "SortNull Low", "Alpha", 1.0, 1.0, 1),
+            ("d203" * 16, "SortNull High", "Zulu", 2.0, 2.0, 2),
+        ]
+        for public_key, name, *_ in rows:
+            _insert_contact(viewer, public_key, name)
+        with closing(sqlite3.connect(viewer.db_path)) as conn:
+            for public_key, _name, city, latitude, snr, hop_count in rows:
+                conn.execute(
+                    """
+                    UPDATE complete_contact_tracking
+                    SET city = ?, latitude = ?, longitude = ?, snr = ?, hop_count = ?
+                    WHERE public_key = ?
+                    """,
+                    (city, latitude, latitude, snr, hop_count, public_key),
+                )
+            conn.commit()
+
+        data = client.get(
+            "/api/contacts",
+            query_string={
+                "since": "all",
+                "page": 1,
+                "page_size": 10,
+                "search": "SortNull",
+                "sort": sort,
+                "direction": "asc",
+            },
+        ).get_json()
+        assert [row["username"] for row in data["tracking_data"]][0] == "SortNull Missing"
+
+    def test_api_contacts_empty_and_out_of_range_pages(self, client, viewer):
+        empty = client.get(
+            "/api/contacts",
+            query_string={"page": 999, "page_size": 2, "search": "NoSuchContact"},
+        ).get_json()
+        assert empty["tracking_data"] == []
+        assert empty["pagination"] == {
+            "page": 1,
+            "page_size": 2,
+            "total_items": 0,
+            "total_pages": 1,
+            "has_previous": False,
+            "has_next": False,
+        }
+
+        for index in range(3):
+            _insert_contact(
+                viewer,
+                f"d30{index}" * 16,
+                f"ClampMatrix {index}",
+            )
+        clamped = client.get(
+            "/api/contacts",
+            query_string={
+                "since": "all",
+                "page": 999,
+                "page_size": 2,
+                "search": "ClampMatrix",
+                "sort": "username",
+                "direction": "asc",
+            },
+        ).get_json()
+        assert clamped["pagination"]["page"] == 2
+        assert clamped["pagination"]["total_pages"] == 2
+        assert [row["username"] for row in clamped["tracking_data"]] == [
+            "ClampMatrix 2"
+        ]
+
+    def test_api_contacts_search_treats_sql_wildcards_literally(self, client, viewer):
+        _insert_contact(viewer, "d401" * 16, "WildcardMatrix 100%")
+        _insert_contact(viewer, "d402" * 16, "WildcardMatrix 100X")
+        data = client.get(
+            "/api/contacts",
+            query_string={
+                "since": "all",
+                "page": 1,
+                "page_size": 10,
+                "search": "100%",
+            },
+        ).get_json()
+        assert [row["username"] for row in data["tracking_data"]] == [
+            "WildcardMatrix 100%"
+        ]
+
+    def test_api_contacts_filtered_stats_cover_all_matching_rows(self, client, viewer):
+        rows = [
+            ("d501" * 16, "StatsMatrix Companion", "Companion Device", "-1 hour", "-1 day"),
+            ("d502" * 16, "StatsMatrix Repeater", "Repeater", "-2 days", "-2 days"),
+            ("d503" * 16, "StatsMatrix Room", "Room Server", "-10 days", "-10 days"),
+        ]
+        for public_key, name, *_ in rows:
+            _insert_contact(viewer, public_key, name)
+        with closing(sqlite3.connect(viewer.db_path)) as conn:
+            for public_key, _name, device_type, last_offset, first_offset in rows:
+                conn.execute(
+                    """
+                    UPDATE complete_contact_tracking
+                    SET device_type = ?,
+                        last_heard = datetime('now', 'localtime', ?),
+                        first_heard = datetime('now', 'localtime', ?)
+                    WHERE public_key = ?
+                    """,
+                    (device_type, last_offset, first_offset, public_key),
+                )
+            conn.commit()
+
+        data = client.get(
+            "/api/contacts",
+            query_string={
+                "since": "30d",
+                "page": 1,
+                "page_size": 1,
+                "search": "StatsMatrix",
+            },
+        ).get_json()
+        assert len(data["tracking_data"]) == 1
+        assert data["filtered_stats"] == {
+            "contacts_24h": 1,
+            "contacts_7d": 2,
+            "contacts_total": 3,
+            "new_companions": 1,
+            "new_repeaters": 1,
+            "new_room_servers": 0,
+        }
+
+    def test_api_contacts_scopes_path_query_to_visible_page(
+        self, client, viewer, monkeypatch
+    ):
+        _insert_contact(viewer, "f101" * 16, "PerfScoped One")
+        _insert_contact(viewer, "f102" * 16, "PerfScoped Two")
+        statements = []
+        original_get_connection = viewer._get_db_connection
+
+        def traced_connection():
+            conn = original_get_connection()
+            conn.set_trace_callback(statements.append)
+            return conn
+
+        monkeypatch.setattr(viewer, "_get_db_connection", traced_connection)
+        data = client.get(
+            "/api/contacts?since=all&page=1&page_size=1&search=PerfScoped"
+        ).get_json()
+
+        assert len(data["tracking_data"]) == 1
+        recent_path_queries = [
+            sql for sql in statements
+            if "WITH recent_paths AS" in sql
+        ]
+        assert len(recent_path_queries) == 1
+        assert "public_key IN (" in recent_path_queries[0]
+
+    def test_contacts_page_uses_bounded_server_loading(self, client):
+        html = client.get("/contacts").get_data(as_text=True)
+        assert 'id="contacts-pagination"' in html
+        assert 'id="contacts-page-previous"' in html
+        assert 'id="contacts-page-next"' in html
+        assert "page_size: String(this.pageSize)" in html
+        assert "new AbortController()" in html
 
     def test_toggle_star_missing_public_key(self, client):
         resp = client.post(

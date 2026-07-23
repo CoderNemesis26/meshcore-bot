@@ -193,7 +193,9 @@ proxy_set_header X-Forwarded-Proto $scheme;
 The viewer also provides JSON API endpoints:
 
 - `GET /api/stats` - Database statistics
-- `GET /api/contacts` - Repeater contacts data
+- `GET /api/contacts` - Repeater contacts data. The contacts page uses optional
+  `page`, `page_size` (maximum 200), `search`, `sort`, and `direction` parameters;
+  callers that omit pagination retain the legacy full-list response.
 - `GET /api/tracking` - Contact tracking data
 
 Example usage:

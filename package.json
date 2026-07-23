@@ -6,7 +6,8 @@
   "scripts": {
     "lint:html": "htmlhint \"modules/web_viewer/templates/**/*.html\"",
     "lint:js": "eslint \"modules/web_viewer/templates/**/*.html\"",
-    "lint:frontend": "npm run lint:html && npm run lint:js"
+    "lint:frontend": "npm run lint:html && npm run lint:js",
+    "test:contacts": "node --test tests/js/contacts_manager.test.mjs"
   },
   "devDependencies": {
     "eslint": "^8.57.0",
