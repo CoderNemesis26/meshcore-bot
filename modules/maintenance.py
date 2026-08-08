@@ -158,6 +158,9 @@ class MaintenanceRunner:
         neighbor_observations_days = get_retention_days(
             'Data_Retention', 'neighbor_observations_retention_days', 365
         )
+        watchduty_days = get_retention_days(
+            'Data_Retention', 'watchduty_retention_days', 90
+        )
         stats_days = get_retention_days('Stats_Command', 'data_retention_days', 7)
 
         try:
@@ -204,6 +207,7 @@ class MaintenanceRunner:
             # aggregate adjacency the mesh graph reads and is deliberately not
             # pruned here (losing it would silently drop confirmed direct links).
             self._cleanup_neighbor_observations(neighbor_observations_days)
+            self._cleanup_watchduty_tables(watchduty_days)
 
             ran_at = _utc_now().isoformat()
             self._last_retention_stats['ran_at'] = ran_at
@@ -252,6 +256,44 @@ class MaintenanceRunner:
             # A missing table (pre-migration-22 database) must not abort the rest
             # of the retention run.
             self.logger.debug(f"Neighbor observation retention skipped: {e}")
+
+    def _cleanup_watchduty_tables(self, retention_days: int) -> None:
+        """Prune WatchDuty feed/report/suppression state past the retention window.
+
+        Sent-report rows and feed/suppression state are only needed while an
+        incident is active and for a short while afterward; default 90 days
+        covers a long fire season without unbounded growth.
+        """
+        if retention_days <= 0:
+            return
+        db_manager = getattr(self.bot, 'db_manager', None)
+        if not db_manager or not hasattr(db_manager, 'delete_timestamp_rows_in_chunks'):
+            return
+
+        cutoff = (_utc_now() - datetime.timedelta(days=retention_days)).isoformat()
+        tables = (
+            ('watchduty_sent_reports', 'sent_at', 'watchduty sent reports'),
+            ('watchduty_feed_state', 'updated_at', 'watchduty feed state'),
+            ('watchduty_alert_suppression', 'updated_at', 'watchduty alert suppression'),
+        )
+        for table, column, label in tables:
+            try:
+                deleted = db_manager.delete_timestamp_rows_in_chunks(
+                    table,
+                    column,
+                    cutoff,
+                    progress_label=label,
+                )
+                if deleted > 0:
+                    self.logger.info(
+                        "Cleaned up %s old %s entries (older than %s days)",
+                        deleted,
+                        table,
+                        retention_days,
+                    )
+            except Exception as e:
+                # Missing tables (pre-migration-23) must not abort retention.
+                self.logger.debug("WatchDuty retention skipped for %s: %s", table, e)
 
     def collect_email_stats(self) -> dict[str, Any]:
         """Gather summary stats for the nightly digest."""

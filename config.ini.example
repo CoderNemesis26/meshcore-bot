@@ -967,6 +967,11 @@ mesh_connections_retention_days = 7
 # grows very slowly and a long window is cheap. The neighbor_links aggregate that
 # the mesh graph reads is never pruned.
 neighbor_observations_retention_days = 365
+#
+# WatchDuty feed/report/suppression state (see [WatchDuty_Service]).
+# Rows are only needed while incidents are active and for a short while after;
+# 90 days covers a long fire season without unbounded growth. Set 0 to disable.
+watchduty_retention_days = 90
 [Path_Command]
 # Enable or disable the path command
 enabled = true
@@ -1475,6 +1480,16 @@ enabled = true
 # channels =
 [Aqi_Command]
 enabled = true
+# channels =
+[Fire_Command]
+# Watch Duty active-fire list / detail (requires internet). Opt-in.
+enabled = false
+# include_prescribed = false
+# channels =
+[Evac_Command]
+# Watch Duty evacuation orders/warnings (requires internet). Opt-in.
+enabled = false
+# include_prescribed = false
 # channels =
 [Advert_Command]
 enabled = true
@@ -2107,6 +2122,61 @@ enabled = false
 
 # Max output length after sanitize (characters)
 # passthrough_max_length = 500
+[WatchDuty_Service]
+# Watch Duty wildfire alerts (true/false). Opt-in; off by default.
+# Polls the public Watch Duty API and/or relays a local roundup file to mesh channels.
+enabled = false
+
+# Optional regional TC_FLOOD scope for mesh channel posts from this service.
+# flood_scope = #west
+
+# Default channel for file roundup and fallback for feed/report posts
+channel = #general
+
+# Optional dedicated channels when poll_api = true (must exist on the device).
+# feed_channel: name | acres | containment | location | link (on acreage/containment change)
+# report_channel: approved report summaries
+# If unset, both use channel above.
+# feed_channel =
+# report_channel =
+
+# Poll the Watch Duty API for active incidents (true/false)
+poll_api = false
+
+# How often to check the roundup file and/or API (seconds). Default: 300 (5 minutes)
+check_interval_seconds = 300
+
+# Cap work per API poll so a large fire season cannot monopolize the bot.
+# Remaining incidents rotate into the next cycle.
+max_events_per_poll = 20
+max_poll_duration_seconds = 90
+
+# Minimum acreage for API events. Missing acreage is excluded. Default: 1.0
+min_acres = 1.0
+
+# Optional bounding box: lat_min,lng_min,lat_max,lng_max. Empty = all events.
+# bbox = 32.0,-120.5,35.5,-114.0
+
+# Optional path to a local watchduty roundup text file to relay when updated
+# output_file =
+
+# When true, feed channel sends only the initial summary per incident
+feed_initial_only = false
+
+# Suppress further alerts for an incident once reports indicate forward progress stopped
+stop_alerts_when_forward_progress_stops = true
+
+# Include prescribed burns in API polling (true/false)
+include_prescribed = false
+
+# When true, skip mesh posts (Discord/Telegram webhooks still send if configured)
+# silence_mesh_output = false
+
+# Optional Discord / Telegram fan-out (see BaseServicePlugin docs)
+# discord_webhook_urls =
+# telegram_chat_ids =
+# telegram_bot_token =
+
 [Earthquake_Service]
 # Enable earthquake alert service (true/false)
 # Polls USGS Earthquake API and posts alerts to a channel when quakes occur in the configured region

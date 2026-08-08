@@ -61,6 +61,9 @@ class DBManager:
         'observed_paths',  # Repeater manager - observed paths from adverts and messages
         'neighbor_links',  # Zero-hop neighbor discovery - current adjacency
         'neighbor_observations',  # Zero-hop neighbor discovery - per-cycle history
+        'watchduty_sent_reports',  # WatchDuty API poll - report IDs already sent
+        'watchduty_feed_state',  # WatchDuty last feed line per event
+        'watchduty_alert_suppression',  # WatchDuty per-event suppression state
     }
 
     def __init__(self, bot: Any, db_path: str = "meshcore_bot.db"):

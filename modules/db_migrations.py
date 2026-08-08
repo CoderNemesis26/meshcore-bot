@@ -788,6 +788,37 @@ def _m0022_neighbor_tables(cursor: sqlite3.Cursor) -> None:
     )
 
 
+def _m0023_watchduty_tables(cursor: sqlite3.Cursor) -> None:
+    """Create WatchDuty state tables used by wildfire polling and alerts."""
+    cursor.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS watchduty_sent_reports (
+            event_id INTEGER NOT NULL,
+            report_id INTEGER NOT NULL,
+            sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (event_id, report_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_watchduty_sent_reports_event
+            ON watchduty_sent_reports(event_id);
+
+        CREATE TABLE IF NOT EXISTS watchduty_feed_state (
+            event_id INTEGER PRIMARY KEY,
+            last_acres REAL NOT NULL,
+            last_containment TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS watchduty_alert_suppression (
+            event_id INTEGER PRIMARY KEY,
+            suppressed INTEGER NOT NULL DEFAULT 0,
+            reason TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+
 # ---------------------------------------------------------------------------
 # Migration registry — append new entries here, never remove or reorder.
 # ---------------------------------------------------------------------------
@@ -817,6 +848,7 @@ MIGRATIONS: list[MigrationEntry] = [
     (20, "mesh_connections: table-specific last_seen index", _m0020_mesh_connections_last_seen_index),
     (21, "daily_rollup: per-payload-type multibyte split", _m0021_daily_rollup_packet_type_encoding),
     (22, "neighbor discovery tables", _m0022_neighbor_tables),
+    (23, "watchduty tables", _m0023_watchduty_tables),
 ]
 
 

@@ -273,3 +273,108 @@ def test_neighbor_observation_retention_tolerates_a_missing_db_manager(tmp_path)
     bot.db_manager = None
 
     MaintenanceRunner(bot, _utc_now)._cleanup_neighbor_observations(365)
+
+
+def _seed_watchduty(path, *, sent_at=None, feed_at=None, suppress_at=None):
+    import sqlite3
+
+    with closing(sqlite3.connect(path)) as conn:
+        if sent_at is not None:
+            conn.execute(
+                """
+                INSERT INTO watchduty_sent_reports (event_id, report_id, sent_at)
+                VALUES (1, 10, ?)
+                """,
+                (sent_at,),
+            )
+        if feed_at is not None:
+            conn.execute(
+                """
+                INSERT INTO watchduty_feed_state
+                    (event_id, last_acres, last_containment, updated_at)
+                VALUES (1, 10.0, '50', ?)
+                """,
+                (feed_at,),
+            )
+        if suppress_at is not None:
+            conn.execute(
+                """
+                INSERT INTO watchduty_alert_suppression
+                    (event_id, suppressed, reason, updated_at)
+                VALUES (1, 1, 'test', ?)
+                """,
+                (suppress_at,),
+            )
+        conn.commit()
+
+
+def _watchduty_counts(path):
+    import sqlite3
+
+    with closing(sqlite3.connect(path)) as conn:
+        return {
+            "sent": conn.execute("SELECT COUNT(*) FROM watchduty_sent_reports").fetchone()[0],
+            "feed": conn.execute("SELECT COUNT(*) FROM watchduty_feed_state").fetchone()[0],
+            "suppress": conn.execute(
+                "SELECT COUNT(*) FROM watchduty_alert_suppression"
+            ).fetchone()[0],
+        }
+
+
+def test_watchduty_retention_deletes_only_old_rows(tmp_path):
+    import datetime
+
+    maintenance, _, path = _maintenance_with_db(tmp_path, ConfigParser())
+    now = datetime.datetime.now(datetime.timezone.utc)
+    recent = (now - datetime.timedelta(days=5)).isoformat()
+    ancient = (now - datetime.timedelta(days=200)).isoformat()
+    _seed_watchduty(path, sent_at=recent, feed_at=ancient, suppress_at=ancient)
+
+    maintenance._cleanup_watchduty_tables(90)
+    counts = _watchduty_counts(path)
+    assert counts["sent"] == 1
+    assert counts["feed"] == 0
+    assert counts["suppress"] == 0
+
+
+def test_watchduty_retention_disabled_when_not_positive(tmp_path):
+    import datetime
+
+    maintenance, _, path = _maintenance_with_db(tmp_path, ConfigParser())
+    ancient = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5000)
+    ).isoformat()
+    _seed_watchduty(path, sent_at=ancient, feed_at=ancient, suppress_at=ancient)
+
+    maintenance._cleanup_watchduty_tables(0)
+    counts = _watchduty_counts(path)
+    assert counts == {"sent": 1, "feed": 1, "suppress": 1}
+
+
+def test_watchduty_retention_survives_missing_tables(tmp_path):
+    import logging
+    import sqlite3
+    from contextlib import contextmanager
+
+    from modules.maintenance import MaintenanceRunner
+
+    path = tmp_path / "old.db"
+    sqlite3.connect(path).close()
+
+    class DBManager:
+        @contextmanager
+        def connection(self):
+            with closing(sqlite3.connect(path)) as conn:
+                yield conn
+
+        def delete_timestamp_rows_in_chunks(self, table, column, cutoff, **kwargs):
+            return delete_timestamp_rows_in_chunks(
+                self.connection, table, column, cutoff, **kwargs
+            )
+
+    bot = Mock()
+    bot.config = ConfigParser()
+    bot.logger = logging.getLogger("test-watchduty-retention")
+    bot.db_manager = DBManager()
+
+    MaintenanceRunner(bot, _utc_now)._cleanup_watchduty_tables(90)

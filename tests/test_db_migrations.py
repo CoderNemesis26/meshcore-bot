@@ -468,3 +468,38 @@ class TestNeighborTables:
         runner.run()
         assert "neighbor_links" in DBManager.ALLOWED_TABLES
         assert "neighbor_observations" in DBManager.ALLOWED_TABLES
+
+
+# ---------------------------------------------------------------------------
+# TestWatchDutyTables (migration 23)
+# ---------------------------------------------------------------------------
+
+
+class TestWatchDutyTables:
+    def test_watchduty_tables_created(self, runner, conn):
+        runner.run()
+        for table in (
+            "watchduty_sent_reports",
+            "watchduty_feed_state",
+            "watchduty_alert_suppression",
+        ):
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            assert row is not None, table
+
+    def test_watchduty_tables_are_writable_by_the_db_manager(self, runner, conn):
+        from modules.db_manager import DBManager
+
+        runner.run()
+        assert "watchduty_sent_reports" in DBManager.ALLOWED_TABLES
+        assert "watchduty_feed_state" in DBManager.ALLOWED_TABLES
+        assert "watchduty_alert_suppression" in DBManager.ALLOWED_TABLES
+
+    def test_watchduty_migration_version_recorded(self, runner, conn):
+        runner.run()
+        applied = conn.execute(
+            "SELECT COUNT(*) FROM schema_version WHERE version = 23"
+        ).fetchone()[0]
+        assert applied == 1
