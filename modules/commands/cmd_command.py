@@ -15,7 +15,7 @@ class CmdCommand(BaseCommand):
 
     # Plugin metadata
     name = "cmd"
-    keywords = ['cmd', 'commands']
+    keywords = ['cmd', 'cmds', 'command', 'commands']
     description = "Lists available commands in compact format"
     category = "basic"
 
