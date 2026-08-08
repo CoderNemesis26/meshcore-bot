@@ -543,6 +543,13 @@ class BaseCommand(ABC):
         # Check if channel matches allowed list
         return message_channel_normalized in allowed_normalized
 
+    def is_enabled(self) -> bool:
+        """Return whether this command is enabled per config."""
+        for attr_name, attr_val in vars(self).items():
+            if attr_name.endswith('_enabled') and isinstance(attr_val, bool):
+                 return attr_val
+        return True
+
     def can_execute(self, message: MeshMessage, skip_channel_check: bool = False) -> bool:
         """Check if this command can be executed with the given message.
 
