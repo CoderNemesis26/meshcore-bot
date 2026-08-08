@@ -1,12 +1,15 @@
 """Tests for PacketCapture observer_name override."""
 
+from __future__ import annotations
+
 import configparser
-import logging
-import types
 from unittest.mock import MagicMock
 
-from modules.service_plugins.packet_capture_service import PacketCaptureService
+import logging
+import types
+import pytest
 
+from modules.service_plugins.packet_capture_service import PacketCaptureService
 
 LOGGER = logging.getLogger("test-packet-capture-observer-name")
 DEVICE_KEY = "ab" * 32
