@@ -99,7 +99,7 @@ tree writable by the service account.
 
 ```bash
 sudo python3 -m venv /opt/meshcore-bot/venv
-sudo /opt/meshcore-bot/venv/bin/pip install \
+sudo /opt/meshcore-bot/venv/bin/python -m pip install \
   -r /opt/meshcore-bot/requirements.txt
 ```
 
@@ -216,7 +216,7 @@ sudo systemctl restart meshcore-bot
 1. Check service status: `sudo systemctl status meshcore-bot`
 2. View logs: `sudo journalctl -u meshcore-bot -n 50`
 3. Check configuration: `sudo nano /etc/meshcore-bot/config.ini`
-4. Verify dependencies: `/opt/meshcore-bot/venv/bin/pip list | grep meshcore`
+4. Verify dependencies: `/opt/meshcore-bot/venv/bin/python -m pip list | grep meshcore`
 
 ### Dependency Import or Syntax Errors
 

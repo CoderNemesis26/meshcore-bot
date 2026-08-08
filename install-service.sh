@@ -412,9 +412,12 @@ configure_armv7_pip_args() {
 # upgrades only what no longer satisfies a specifier, which is the fast path.
 # `--upgrade` would eagerly churn transitive dependencies on every run.  Extras
 # installed previously (profanity filter, geocoding) survive, unlike a rebuild.
+# Also rewrites console-script shebangs so an earlier .venv-build-$$ relocate
+# does not leave venv/bin/pip broken after --update-venv (issue #229).
 update_venv_in_place() {
     local venv="$1"
     local requirements="$2"
+    local rewrite_helper
 
     print_info "Reusing the existing virtualenv at $venv"
     print_info "Synchronizing dependencies from $requirements"
@@ -422,6 +425,19 @@ update_venv_in_place() {
     if ! "$venv/bin/python" -m pip install --quiet "${ARMV7_PIP_ARGS[@]}" -r "$requirements"; then
         print_error "Failed to update Python dependencies"
         print_info "Check your internet connection, or rebuild with: $0 --upgrade"
+        return 1
+    fi
+
+    # Prefer the helper shipped with this installer invocation so --update-venv
+    # heals broken shebangs even before a full code sync lands under INSTALL_DIR.
+    if [ -f "$SCRIPT_DIR/scripts/rewrite_venv_shebangs.sh" ]; then
+        rewrite_helper="$SCRIPT_DIR/scripts/rewrite_venv_shebangs.sh"
+    else
+        rewrite_helper="$INSTALL_DIR/scripts/rewrite_venv_shebangs.sh"
+    fi
+    if ! bash "$rewrite_helper" "$venv"; then
+        print_error "Failed to rewrite virtualenv console-script shebangs"
+        print_info "Rebuild with: $0 --upgrade"
         return 1
     fi
 
@@ -780,12 +796,26 @@ if [[ "$VENV_UPDATED_IN_PLACE" != true ]]; then
         print_error "Failed to activate the newly built virtual environment"
         exit 1
     fi
+    # Console scripts still embed the .venv-build-$$ shebang; rewrite before any
+    # later call to venv/bin/pip or other entry points (see issue #229).  Keep
+    # VENV_OLD until rewrite succeeds so a failure can restore the prior tree.
+    if ! bash "$INSTALL_DIR/scripts/rewrite_venv_shebangs.sh" "$INSTALL_DIR/venv"; then
+        print_error "Failed to rewrite virtualenv console-script shebangs after relocate"
+        if [ -d "$VENV_OLD" ]; then
+            rm -rf "$INSTALL_DIR/venv"
+            mv "$VENV_OLD" "$INSTALL_DIR/venv"
+            print_warning "Restored the previous virtualenv after shebang rewrite failure"
+        fi
+        exit 1
+    fi
     rm -rf "$VENV_OLD"
     print_success "Installed all Python dependencies into a fresh virtual environment"
 fi
 
 # Optional extras.  A rebuild starts empty so these have to be re-chosen; an
 # in-place update keeps whatever was installed before, so don't re-prompt.
+# Always invoke pip via `python -m pip` so a stale shebang cannot break installs.
+VENV_PYTHON="$INSTALL_DIR/venv/bin/python"
 if [[ "$VENV_UPDATED_IN_PLACE" == true ]]; then
     print_info "Kept any optional packages already installed in the virtualenv"
 else
@@ -797,20 +827,22 @@ else
 
     if ask_yes_no "Install profanity filter packages? (recommended if using the profanity filter feature)" "n"; then
         print_info "Installing profanity filter packages..."
-        "$INSTALL_DIR/venv/bin/pip" install --quiet "better-profanity>=0.7.0" "unidecode>=1.3.0" || {
+        if "$VENV_PYTHON" -m pip install --quiet "better-profanity>=0.7.0" "unidecode>=1.3.0"; then
+            print_success "Installed profanity filter packages"
+        else
             print_warning "Failed to install profanity filter packages (non-fatal)"
-        }
-        print_success "Installed profanity filter packages"
+        fi
     else
         print_info "Skipping profanity filter packages"
     fi
 
     if ask_yes_no "Install geocoding extras? (recommended if using location/path commands)" "n"; then
         print_info "Installing geocoding extras..."
-        "$INSTALL_DIR/venv/bin/pip" install --quiet "pycountry>=23.12.0" "us>=2.0.0" || {
+        if "$VENV_PYTHON" -m pip install --quiet "pycountry>=23.12.0" "us>=2.0.0"; then
+            print_success "Installed geocoding extras"
+        else
             print_warning "Failed to install geocoding extras (non-fatal)"
-        }
-        print_success "Installed geocoding extras"
+        fi
     else
         print_info "Skipping geocoding extras"
     fi

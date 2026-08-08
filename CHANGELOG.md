@@ -213,6 +213,12 @@ considered stable; breaking changes to them will come with a major version bump.
 
 ### Fixed
 
+- Service installers no longer leave `venv/bin/pip` (and other console scripts)
+  with shebangs pointing at the temporary `.venv-build-$$` path after the atomic
+  virtualenv swap. Optional package prompts and documented pip invocations now
+  use `venv/bin/python -m pip`. `--update-venv` rewrites shebangs in place so
+  already-broken installs heal without a full rebuild, and the previous venv is
+  kept until rewrite succeeds (issue #229).
 - Data retention now runs shortly after startup and then daily. It no longer
   requires 24 hours of uninterrupted uptime before the first cleanup, and its
   timer remains independent from the nightly maintenance email.

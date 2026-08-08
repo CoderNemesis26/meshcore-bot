@@ -235,13 +235,22 @@ VENV_OLD="${INSTALL_ROOT}/.venv-old-$$"
 rm -rf "${VENV_BUILD}" "${VENV_OLD}"
 echo "Building fresh Python virtualenv…"
 python3 -m venv "${VENV_BUILD}"
-"${VENV_BUILD}/bin/pip" install --quiet --upgrade pip
-"${VENV_BUILD}/bin/pip" install --quiet -r "${INSTALL_ROOT}/requirements.txt"
+"${VENV_BUILD}/bin/python" -m pip install --quiet --upgrade pip
+"${VENV_BUILD}/bin/python" -m pip install --quiet -r "${INSTALL_ROOT}/requirements.txt"
 if [ -d "${INSTALL_ROOT}/venv" ]; then
     mv "${INSTALL_ROOT}/venv" "${VENV_OLD}"
 fi
 if ! mv "${VENV_BUILD}" "${INSTALL_ROOT}/venv"; then
     [ -d "${VENV_OLD}" ] && mv "${VENV_OLD}" "${INSTALL_ROOT}/venv"
+    exit 1
+fi
+# Shebangs still point at .venv-build-$$; rewrite for the final path (#229).
+# Keep VENV_OLD until rewrite succeeds so a failure can restore the prior tree.
+if ! bash "${INSTALL_ROOT}/scripts/rewrite_venv_shebangs.sh" "${INSTALL_ROOT}/venv"; then
+    if [ -d "${VENV_OLD}" ]; then
+        rm -rf "${INSTALL_ROOT}/venv"
+        mv "${VENV_OLD}" "${INSTALL_ROOT}/venv"
+    fi
     exit 1
 fi
 rm -rf "${VENV_OLD}"
