@@ -35,15 +35,16 @@ def build_service(
     bot = MagicMock()
     bot.config = config
 
-    service = object.__new__(PacketCaptureService)
-    service.bot = bot
-    service.logger = LOGGER
-    service.meshcore = types.SimpleNamespace(
+    bot.meshcore = types.SimpleNamespace(
         self_info={
             "name": device_name,
             "public_key": DEVICE_KEY,
         }
     )
+    
+    service = object.__new__(PacketCaptureService)
+    service.bot = bot
+    service.logger = LOGGER
 
     service.debug = False
     service.decode_payloads = False
