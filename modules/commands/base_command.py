@@ -543,6 +543,24 @@ class BaseCommand(ABC):
         # Check if channel matches allowed list
         return message_channel_normalized in allowed_normalized
 
+    def is_enabled(self) -> bool:
+        """Return whether this command is enabled per config.
+
+        Checks known enable attribute names in a stable order so feature-flag
+        attributes like ``prefix_best_enabled`` or ``geographic_guessing_enabled``
+        are not mistaken for the command master switch.
+        """
+        for attr_name in (
+            "enabled",
+            "_enabled",
+            f"{self.name}_enabled",
+            "command_enabled",
+        ):
+            value = getattr(self, attr_name, None)
+            if isinstance(value, bool):
+                return value
+        return True
+
     def can_execute(self, message: MeshMessage, skip_channel_check: bool = False) -> bool:
         """Check if this command can be executed with the given message.
 

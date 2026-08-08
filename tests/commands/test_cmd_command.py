@@ -99,3 +99,29 @@ class TestCmdCommand:
         assert result.startswith("Available commands: ")
         # Should NOT contain doubled numbers like "(5 5 more)"
         assert not re.search(r'\(\d+ \d+ more\)', result)
+
+    def test_get_commands_list_omits_disabled_commands(self, command_mock_bot):
+        """Disabled plugins (e.g. sports) must not appear in the cmd list."""
+        command_mock_bot.config.add_section("Cmd_Command")
+        command_mock_bot.config.set("Cmd_Command", "enabled", "true")
+        command_mock_bot.command_manager.keywords = {}
+
+        enabled = type("MockCmd", (), {
+            "keywords": ["ping"],
+            "is_enabled": lambda self: True,
+        })()
+        disabled = type("MockCmd", (), {
+            "keywords": ["sports", "score", "scores"],
+            "is_enabled": lambda self: False,
+        })()
+        command_mock_bot.command_manager.commands = {
+            "ping": enabled,
+            "sports": disabled,
+        }
+        cmd = CmdCommand(command_mock_bot)
+
+        result = cmd._get_commands_list()
+        assert "ping" in result
+        assert "sports" not in result
+        assert "score" not in result
+        assert "scores" not in result

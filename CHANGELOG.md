@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format loosely foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- `cmd` and `help` no longer list commands that are disabled in config
+
 ## [1.0.0] — 2026-08-07
 
 v1.0.0 marks the first stable release. It adds zero-hop neighbor discovery, a

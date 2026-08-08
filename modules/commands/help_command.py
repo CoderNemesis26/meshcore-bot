@@ -192,6 +192,8 @@ class HelpCommand(BaseCommand):
             # Filter by channel when message is provided
             primary_names = set()
             for cmd_name, cmd_instance in self.bot.command_manager.commands.items():
+                if hasattr(cmd_instance, 'is_enabled') and not cmd_instance.is_enabled():
+                    continue
                 if not self._is_command_valid_for_channel(cmd_name, cmd_instance, message):
                     continue
                 primary_name = cmd_instance.name if hasattr(cmd_instance, 'name') else cmd_name
@@ -249,10 +251,9 @@ class HelpCommand(BaseCommand):
                                 command_counts[primary_name] += count
             except Exception as e:
                 self.logger.debug(f"Error querying command stats: {e}")
-                # If stats table doesn't exist or query fails, fall back to all commands
-                for cmd_name in self.bot.command_manager.commands:
-                    primary_name = self.bot.command_manager.commands[cmd_name].name if hasattr(self.bot.command_manager.commands[cmd_name], 'name') else cmd_name
-                    command_counts[primary_name] = 0
+                # If stats table doesn't exist or query fails, fall back to enabled commands
+                for pname in primary_names:
+                    command_counts[pname] = 0
 
             # Ensure every channel-valid command appears even if it has no usage stats
             # yet. Without this, a populated command_stats table would make the list show
@@ -266,17 +267,18 @@ class HelpCommand(BaseCommand):
             if command_counts:
                 # Sort by count descending, then by name for consistency
                 sorted_commands = sorted(
-                    command_counts.items(),
+                    ((name, count) for name, count in command_counts.items() if name in primary_names),
                     key=lambda x: (-x[1], x[0])
                 )
                 # Extract just the command names (only primary names, no aliases)
                 command_names = [name for name, _ in sorted_commands]
             else:
-                # Fallback: use all primary command names (filtered by channel)
+                # Fallback: use all primary command names (filtered by enable + channel)
                 command_names = sorted([
                     cmd.name if hasattr(cmd, 'name') else name
                     for name, cmd in self.bot.command_manager.commands.items()
-                    if self._is_command_valid_for_channel(name, cmd, message)
+                    if (not hasattr(cmd, 'is_enabled') or cmd.is_enabled())
+                    and self._is_command_valid_for_channel(name, cmd, message)
                 ])
 
             # Apply max_length truncation when reserved for suffix (e.g. " | More: 'help <command>'")
@@ -284,11 +286,12 @@ class HelpCommand(BaseCommand):
 
         except Exception as e:
             self.logger.error(f"Error getting available commands list: {e}")
-            # Fallback to simple list of all command names (filtered by channel)
+            # Fallback to simple list of all command names (filtered by enable + channel)
             command_names = sorted([
                 cmd.name if hasattr(cmd, 'name') else name
                 for name, cmd in self.bot.command_manager.commands.items()
-                if self._is_command_valid_for_channel(name, cmd, message)
+                if (not hasattr(cmd, 'is_enabled') or cmd.is_enabled())
+                and self._is_command_valid_for_channel(name, cmd, message)
             ])
             return self._format_commands_list_to_length(command_names, max_length)
 

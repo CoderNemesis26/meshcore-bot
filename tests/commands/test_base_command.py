@@ -169,6 +169,29 @@ class TestGetConfigValue:
         cmd = SportsCommand(command_mock_bot)
         assert cmd.sports_enabled is False
 
+    def test_is_enabled_uses_named_enabled_attr(self, command_mock_bot):
+        """is_enabled() reads {name}_enabled (e.g. sports_enabled)."""
+        command_mock_bot.config.add_section("Sports_Command")
+        command_mock_bot.config.set("Sports_Command", "enabled", "false")
+        cmd = SportsCommand(command_mock_bot)
+        assert cmd.is_enabled() is False
+
+    def test_is_enabled_uses_plain_enabled_attr(self, command_mock_bot):
+        """is_enabled() reads self.enabled used by hacker/announcements."""
+        command_mock_bot.config.add_section("Hacker_Command")
+        command_mock_bot.config.set("Hacker_Command", "enabled", "false")
+        cmd = HackerCommand(command_mock_bot)
+        assert cmd.is_enabled() is False
+
+    def test_is_enabled_ignores_feature_flag_attrs(self, command_mock_bot):
+        """Feature-flag *_enabled attrs must not override the master switch."""
+        cmd = _TestCommand(command_mock_bot)
+        cmd.testcmd_enabled = True
+        cmd.geographic_guessing_enabled = False
+        assert cmd.is_enabled() is True
+        cmd.testcmd_enabled = False
+        assert cmd.is_enabled() is False
+
     def test_alert_command_enabled_standard(self, command_mock_bot):
         """Alert_Command uses enabled (standard) when present."""
         command_mock_bot.config.add_section("Alert_Command")
