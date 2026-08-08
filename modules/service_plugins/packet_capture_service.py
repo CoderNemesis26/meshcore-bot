@@ -1212,7 +1212,7 @@ class PacketCaptureService(BaseServicePlugin):
             payload_len = str(max(0, packet_len - 1 - transport_bytes - 1 - path_bytes))
 
         # Get device name and public key
-        device_name = self._get_bot_name()
+        device_name = self._get_observer_name()
         if not device_name:
             device_name = "MeshCore Device"
 
@@ -1556,6 +1556,23 @@ class PacketCaptureService(BaseServicePlugin):
                 self.logger.debug(f"Decode error traceback: {traceback.format_exc()}")
             return None
 
+    def _get_observer_name(self) -> str:
+        """Get observer name for PacketCapture MQTT reporting.
+
+        Allows the observer/analyzer identity to differ from the
+        MeshCore RF node and bot name.
+        """
+        observer_name = self.bot.config.get(
+            "PacketCapture",
+            "observer_name",
+            fallback=""
+        ).strip()
+
+        if observer_name:
+            return observer_name
+
+        return self._get_bot_name()
+    
     def _get_bot_name(self) -> str:
         """Get bot name from device or config.
 
@@ -2767,7 +2784,7 @@ class PacketCaptureService(BaseServicePlugin):
         firmware_info = await self.get_firmware_info()
 
         # Get device name and public key
-        device_name = self._get_bot_name()
+        device_name = self._get_observer_name()
         if not device_name:
             device_name = "MeshCore Device"
 
