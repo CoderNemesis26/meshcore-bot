@@ -1860,6 +1860,10 @@ auth_token_method = device
 # Default: XYZ (invalid if not set)
 iata = XYZ
 
+# Optional observer name used in MQTT packet/status payloads.
+# If unset, the connected device/bot name is used.
+observer_name =
+
 # MQTT Broker Configuration
 # You can configure multiple MQTT brokers by using mqtt1_*, mqtt2_*, mqtt3_*, etc.
 # Each broker can have independent settings for transport, TLS, authentication, and topics.
