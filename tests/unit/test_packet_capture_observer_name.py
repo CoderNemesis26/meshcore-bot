@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import configparser
-from unittest.mock import MagicMock
-
 import logging
 import types
-import pytest
+from unittest.mock import MagicMock
 
 from modules.service_plugins.packet_capture_service import PacketCaptureService
 
@@ -41,7 +39,7 @@ def build_service(
             "public_key": DEVICE_KEY,
         }
     )
-    
+
     service = object.__new__(PacketCaptureService)
     service.bot = bot
     service.logger = LOGGER

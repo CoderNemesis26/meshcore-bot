@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format loosely foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- `[PacketCapture] observer_name` — an optional name reported as the `origin` of
+  MQTT packet and status payloads. It lets the observer/analyzer identity differ
+  from the MeshCore RF node, which is useful when one bot name is already taken
+  by the radio's advertised name. Unset (the default) keeps the previous
+  behavior: the connected device name, falling back to `[Bot] bot_name`.
+
 ## [1.0.0] — 2026-08-07
 
 v1.0.0 marks the first stable release. It adds zero-hop neighbor discovery, a

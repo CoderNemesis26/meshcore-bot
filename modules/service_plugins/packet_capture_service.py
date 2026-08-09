@@ -1572,7 +1572,7 @@ class PacketCaptureService(BaseServicePlugin):
             return observer_name
 
         return self._get_bot_name()
-    
+
     def _get_bot_name(self) -> str:
         """Get bot name from device or config.
 
