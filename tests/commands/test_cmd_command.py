@@ -4,7 +4,15 @@ import pytest
 
 from modules.commands.cmd_command import CmdCommand
 from tests.conftest import mock_message
+from dataclasses import dataclass
 
+@dataclass
+class MockCmdObject:
+    enabled: bool
+    keywords: str
+
+    def is_enabled(self):
+        return self.enabled
 
 class TestCmdCommand:
     """Tests for CmdCommand."""
@@ -23,6 +31,32 @@ class TestCmdCommand:
         cmd = CmdCommand(command_mock_bot)
         msg = mock_message(content="cmd", is_dm=True)
         assert cmd.can_execute(msg) is False
+
+    @pytest.mark.asyncio
+    async def test_is_not_listed_when_sports_cmd_disabled(self, command_mock_bot):
+        command_mock_bot.config.add_section("Cmd_Command")
+        command_mock_bot.config.set("Cmd_Command", "enabled", "true")
+        command_mock_bot.command_manager.keywords = {}
+        command_mock_bot.command_manager.commands = {
+            'test': MockCmdObject(enabled=True, keywords=['test']),
+            'ping': MockCmdObject(enabled=True, keywords=['ping']),
+            'wx': MockCmdObject(enabled=True, keywords=['wx']),
+            'sports': MockCmdObject(enabled=False, keywords=['sports']),
+            'trace': MockCmdObject(enabled=True, keywords=['trace']),
+            'alert': MockCmdObject(enabled=True, keywords=['alert'])}
+
+        cmd = CmdCommand(command_mock_bot)
+        msg = mock_message(content="cmd", is_dm=True)
+        result = await cmd.execute(msg)
+        call_args = command_mock_bot.command_manager.send_response.call_args
+
+        assert result is True
+        assert 'test' in call_args[0][1]
+        assert 'ping' in call_args[0][1]
+        assert 'wx' in call_args[0][1]
+        assert 'sports' not in call_args[0][1]
+        assert 'trace' in call_args[0][1]
+        assert 'alert' in call_args[0][1]
 
     @pytest.mark.asyncio
     async def test_execute_returns_command_list(self, command_mock_bot):
