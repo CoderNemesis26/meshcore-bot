@@ -2,17 +2,14 @@
 
 import pytest
 
+from modules.commands.alert_command import AlertCommand
 from modules.commands.cmd_command import CmdCommand
+from modules.commands.ping_command import PingCommand
+from modules.commands.sports_command import SportsCommand
+from modules.commands.trace_command import TraceCommand
+from modules.commands.wx_command import WxCommand
 from tests.conftest import mock_message
-from dataclasses import dataclass
 
-@dataclass
-class MockCmdObject:
-    enabled: bool
-    keywords: str
-
-    def is_enabled(self):
-        return self.enabled
 
 class TestCmdCommand:
     """Tests for CmdCommand."""
@@ -36,14 +33,25 @@ class TestCmdCommand:
     async def test_is_not_listed_when_sports_cmd_disabled(self, command_mock_bot):
         command_mock_bot.config.add_section("Cmd_Command")
         command_mock_bot.config.set("Cmd_Command", "enabled", "true")
+        command_mock_bot.config.add_section("Ping_Command")
+        command_mock_bot.config.set("Ping_Command", "enabled", "true")
+        command_mock_bot.config.add_section("Wx_Command")
+        command_mock_bot.config.set("Wx_Command", "enabled", "true")
+        command_mock_bot.config.add_section("Sports_Command")
+        command_mock_bot.config.set("Sports_Command", "enabled", "false")
+        command_mock_bot.config.add_section("Trace_Command")
+        command_mock_bot.config.set("Trace_Command", "enabled", "true")
+        command_mock_bot.config.add_section("Alert_Command")
+        command_mock_bot.config.set("Alert_Command", "enabled", "true")
+
         command_mock_bot.command_manager.keywords = {}
         command_mock_bot.command_manager.commands = {
-            'test': MockCmdObject(enabled=True, keywords=['test']),
-            'ping': MockCmdObject(enabled=True, keywords=['ping']),
-            'wx': MockCmdObject(enabled=True, keywords=['wx']),
-            'sports': MockCmdObject(enabled=False, keywords=['sports']),
-            'trace': MockCmdObject(enabled=True, keywords=['trace']),
-            'alert': MockCmdObject(enabled=True, keywords=['alert'])}
+            'ping': PingCommand(command_mock_bot),
+            'wx': WxCommand(command_mock_bot),
+            'sports': SportsCommand(command_mock_bot),
+            'trace': TraceCommand(command_mock_bot),
+            'alert': AlertCommand(command_mock_bot)
+        }
 
         cmd = CmdCommand(command_mock_bot)
         msg = mock_message(content="cmd", is_dm=True)
@@ -51,7 +59,6 @@ class TestCmdCommand:
         call_args = command_mock_bot.command_manager.send_response.call_args
 
         assert result is True
-        assert 'test' in call_args[0][1]
         assert 'ping' in call_args[0][1]
         assert 'wx' in call_args[0][1]
         assert 'sports' not in call_args[0][1]
@@ -119,8 +126,8 @@ class TestCmdCommand:
         commands = {}
         for i in range(25):
             name = f"longcommandname{i:02d}"
-            mock_cmd = type("MockCmd", (), {"keywords": [name]})()
-            commands[name] = mock_cmd
+            commands[name] = CmdCommand(command_mock_bot)
+            command_mock_bot.config.add_section(name.title() + "_Command")
         command_mock_bot.command_manager.commands = commands
         cmd = CmdCommand(command_mock_bot)
         # "Available commands: " = 20 chars; "longcommandnameNN" = 17 chars; ", " = 2 chars
