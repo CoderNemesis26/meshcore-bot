@@ -2109,3 +2109,43 @@ class TestHandleNewContactAutoManage:
         assert any("New repeater discovered" in msg for msg in log_messages)
         mesh.commands.add_contact.assert_not_called()
         rm.add_companion_from_contact_data.assert_not_called()
+
+
+class TestZeroHopObservedPathWriter:
+    def test_store_observed_path_skips_empty_and_one_byte_paths(self, handler, bot):
+        bot.db_manager = Mock()
+        handler._store_observed_path({"public_key": "aa" * 32}, "", 0, "advert")
+        handler._store_observed_path({"public_key": "aa" * 32}, "ab", 1, "advert")
+        bot.db_manager.execute_query.assert_not_called()
+        bot.db_manager.execute_update.assert_not_called()
+
+    async def test_zero_hop_advert_upserts_direct_neighbour_row(self, handler, bot):
+        bot.db_manager = Mock()
+        bot.repeater_manager = Mock()
+        bot.repeater_manager.track_contact_advertisement = AsyncMock(
+            return_value=Mock(ok=True)
+        )
+        pk = "ab" * 32
+        with patch(
+            "modules.message_handler.upsert_zero_hop_observed_path_via_manager"
+        ) as upsert:
+            await handler._process_advertisement_packet(
+                {
+                    "payload_type_name": "ADVERT",
+                    "sender_id": pk,
+                    "bytes_per_hop": 2,
+                    "path_byte_length": 0,
+                    "routing_info": {
+                        "path_hex": "",
+                        "path_length": 0,
+                        "packet_hash": "1111111111111111",
+                    },
+                },
+                {"snr": 5.5, "rssi": -77},
+            )
+        upsert.assert_called_once()
+        _args, kwargs = upsert.call_args
+        assert _args[1] == pk
+        assert kwargs["snr"] == 5.5
+        assert kwargs["rssi"] == -77
+        assert kwargs["update_rssi"] is True

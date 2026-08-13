@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format loosely foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Dashboard **One-hop neighbours** now lists radios this node heard directly
+  (MeshCore hop count 0: empty RF path), not originators of 1-hop relayed
+  adverts. Empty-path adverts are stored in `observed_paths` with SNR/RSSI;
+  neighbor-discover cycles refresh SNR on those rows. A one-time backfill
+  copies recent zero-hop ADVERTs out of `packet_stream`.
+
+### Added
+
+- Migration 23: nullable `snr` / `rssi` columns on `observed_paths` for
+  zero-hop advert rows.
+
 ## [1.0.0] — 2026-08-07
 
 v1.0.0 marks the first stable release. It adds zero-hop neighbor discovery, a

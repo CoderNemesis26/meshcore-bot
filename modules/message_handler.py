@@ -15,6 +15,7 @@ from typing import Any, TypedDict
 from .enums import AdvertFlags, DeviceRole, PayloadType, PayloadVersion, RouteType
 from .graph_trace_helper import update_mesh_graph_from_trace_data
 from .models import MeshMessage
+from .neighbors_discovery import upsert_zero_hop_observed_path_via_manager
 from .security_utils import sanitize_input, sanitize_name
 from .utils import (
     calculate_packet_hash,
@@ -770,8 +771,24 @@ class MessageHandler:
                 ):
                     self._update_mesh_graph_from_advert(advert_data, out_path, path_byte_length, packet_info)
 
-                # Store complete path in observed_paths table
-                if out_path and out_path_len > 0:
+                # Store complete path in observed_paths table. Empty-path (direct RF)
+                # adverts are stored too — those are true one-hop neighbours.
+                if out_path_len == 0 and advert_data.get("public_key"):
+                    upsert_zero_hop_observed_path_via_manager(
+                        getattr(self.bot, "db_manager", None),
+                        advert_data["public_key"],
+                        self.logger,
+                        snr=signal_info.get("snr") if signal_info else None,
+                        rssi=(
+                            signal_info.get("rssi", signal_info.get("signal_strength"))
+                            if signal_info
+                            else None
+                        ),
+                        bytes_per_hop=packet_info.get("bytes_per_hop", 1) or 1,
+                        packet_hash=packet_hash,
+                        update_rssi=True,
+                    )
+                elif out_path and out_path_len > 0:
                     self._store_observed_path(
                         advert_data,
                         out_path,
@@ -1137,6 +1154,9 @@ class MessageHandler:
                                 # (header + path_len + path + payload, without RF wrapper)
                                 decoded_packet["raw_packet_hex"] = extracted_payload if extracted_payload else raw_hex
                                 decoded_packet["packet_hash"] = packet_hash
+                                decoded_packet["snr"] = snr_value
+                                if "rssi" in payload:
+                                    decoded_packet["rssi"] = payload.get("rssi")
                                 self.bot.web_viewer_integration.bot_integration.capture_full_packet_data(decoded_packet)
 
                             # Process ADVERT packets for contact tracking (regardless of path length)

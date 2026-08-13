@@ -92,6 +92,11 @@ LIBRARY_MSG_SENT_TIMEOUT = 15.0
 # before pinning a contact to zero-hop and restores afterwards.
 CONTACT_NO_PATH = -1
 
+# Empty-path advert rows in observed_paths: both endpoints are the originator.
+# 3-byte prefixes match the mesh graph's neighbor-evidence width.
+ZERO_HOP_PATH_HEX = ""
+ZERO_HOP_PREFIX_HEX_CHARS = 6
+
 
 def clamp_interval_hours(hours: int) -> int:
     """Clamp to the firmware's 12-336h band, falling back to the 24h default."""
@@ -573,6 +578,122 @@ async def fetch_self_scopes(meshcore: Any, cfg: NeighborsConfig,
     return str((getattr(result, "payload", None) or {}).get("scope_name", "") or "").strip()
 
 
+def _observed_paths_has_signal_columns(cursor: Any) -> bool:
+    cols = {row[1] for row in cursor.execute("PRAGMA table_info(observed_paths)")}
+    return "snr" in cols and "rssi" in cols
+
+
+def upsert_zero_hop_observed_path(
+    cursor: Any,
+    public_key: str,
+    *,
+    snr: Optional[float] = None,
+    rssi: Optional[float] = None,
+    bytes_per_hop: int = 1,
+    packet_hash: Optional[str] = None,
+    last_seen: Optional[str] = None,
+    update_rssi: bool = True,
+) -> None:
+    """Insert or refresh a direct-RF (empty path) advert row in observed_paths.
+
+    Discover responses carry SNR only, so ``update_rssi=False`` leaves a
+    previously stored RSSI from a zero-path advert in place. A later reception
+    with no measurement must not NULL out a stored figure either: COALESCE
+    keeps the existing column when the new value is None.
+    """
+    key = (public_key or "").strip().lower()
+    if len(key) < 2:
+        return
+    tables = {
+        row[0]
+        for row in cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='observed_paths'"
+        )
+    }
+    if "observed_paths" not in tables:
+        return
+
+    prefix = key[:ZERO_HOP_PREFIX_HEX_CHARS]
+    stamp = last_seen or datetime.now().isoformat()
+    stored_hash = packet_hash if (packet_hash and packet_hash != "0000000000000000") else None
+    has_signal = _observed_paths_has_signal_columns(cursor)
+
+    existing = cursor.execute(
+        """
+        SELECT id, observation_count FROM observed_paths
+        WHERE public_key = ? AND path_hex = ? AND packet_type = 'advert'
+        """,
+        (key, ZERO_HOP_PATH_HEX),
+    ).fetchone()
+
+    if existing:
+        path_id = existing["id"] if not isinstance(existing, tuple) else existing[0]
+        count = (existing["observation_count"] if not isinstance(existing, tuple) else existing[1]) or 1
+        if has_signal:
+            cursor.execute(
+                """
+                UPDATE observed_paths
+                SET observation_count = ?,
+                    last_seen = ?,
+                    snr = COALESCE(?, snr),
+                    rssi = CASE WHEN ? THEN COALESCE(?, rssi) ELSE rssi END
+                WHERE id = ?
+                """,
+                (count + 1, stamp, snr, 1 if update_rssi else 0, rssi, path_id),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE observed_paths
+                SET observation_count = ?, last_seen = ?
+                WHERE id = ?
+                """,
+                (count + 1, stamp, path_id),
+            )
+        return
+
+    if has_signal:
+        cursor.execute(
+            """
+            INSERT INTO observed_paths
+                (public_key, packet_hash, from_prefix, to_prefix, path_hex, path_length,
+                 bytes_per_hop, packet_type, first_seen, last_seen, observation_count,
+                 snr, rssi)
+            VALUES (?, ?, ?, ?, ?, 0, ?, 'advert', ?, ?, 1, ?, ?)
+            """,
+            (key, stored_hash, prefix, prefix, ZERO_HOP_PATH_HEX, bytes_per_hop,
+             stamp, stamp, snr, rssi if update_rssi else None),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO observed_paths
+                (public_key, packet_hash, from_prefix, to_prefix, path_hex, path_length,
+                 bytes_per_hop, packet_type, first_seen, last_seen, observation_count)
+            VALUES (?, ?, ?, ?, ?, 0, ?, 'advert', ?, ?, 1)
+            """,
+            (key, stored_hash, prefix, prefix, ZERO_HOP_PATH_HEX, bytes_per_hop,
+             stamp, stamp),
+        )
+
+
+def upsert_zero_hop_observed_path_via_manager(
+    db_manager: Any,
+    public_key: str,
+    logger: logging.Logger,
+    **kwargs: Any,
+) -> None:
+    """Open a connection, upsert one zero-hop row, and commit."""
+    if db_manager is None or not hasattr(db_manager, "connection"):
+        return
+    try:
+        with db_manager.connection() as conn:
+            upsert_zero_hop_observed_path(conn.cursor(), public_key, **kwargs)
+            conn.commit()
+    except Exception as exc:
+        logger.debug(f"Could not store zero-hop observed path: {exc}")
+
+
 def record_neighbors(
     db_manager: Any,
     self_pubkey: str,
@@ -637,6 +758,14 @@ def record_neighbors(
                     """,
                     (self_key, entry.pubkey.lower(), stamp, stamp,
                      entry.snr, entry.snr, entry.snr, entry.status, entry.scopes or ""),
+                )
+                # Discover is a confirmed direct RF reception: keep the dashboard
+                # neighbour list in sync. SNR only — leave RSSI to zero-path adverts.
+                upsert_zero_hop_observed_path(
+                    cursor,
+                    entry.pubkey,
+                    snr=entry.snr,
+                    update_rssi=False,
                 )
                 written += 1
             conn.commit()

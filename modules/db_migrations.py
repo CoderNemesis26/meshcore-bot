@@ -788,6 +788,19 @@ def _m0022_neighbor_tables(cursor: sqlite3.Cursor) -> None:
     )
 
 
+def _m0023_observed_paths_zero_hop_signal(cursor: sqlite3.Cursor) -> None:
+    """SNR/RSSI on observed_paths for direct (zero-hop) advert rows.
+
+    Empty-path adverts are a confirmed last-hop-is-originator measurement, so
+    the figure belongs on the path row rather than on complete_contact_tracking
+    (whose hop_count over-claims zero-hop). Multi-hop rows leave these NULL.
+    """
+    if not _table_exists(cursor, "observed_paths"):
+        return
+    _add_column(cursor, "observed_paths", "snr", "REAL")
+    _add_column(cursor, "observed_paths", "rssi", "REAL")
+
+
 # ---------------------------------------------------------------------------
 # Migration registry — append new entries here, never remove or reorder.
 # ---------------------------------------------------------------------------
@@ -817,6 +830,7 @@ MIGRATIONS: list[MigrationEntry] = [
     (20, "mesh_connections: table-specific last_seen index", _m0020_mesh_connections_last_seen_index),
     (21, "daily_rollup: per-payload-type multibyte split", _m0021_daily_rollup_packet_type_encoding),
     (22, "neighbor discovery tables", _m0022_neighbor_tables),
+    (23, "observed_paths: snr/rssi for zero-hop adverts", _m0023_observed_paths_zero_hop_signal),
 ]
 
 
