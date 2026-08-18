@@ -14,6 +14,7 @@
 #   ./install-service.sh          # Normal installation (non-destructive if already installed)
 #   ./install-service.sh --upgrade # Upgrade mode (copies new files, updates dependencies)
 #   ./install-service.sh -u        # Short form of --upgrade
+#   ./install-service.sh -u --install-extras # upgrade + install optional packages (profantiy, geodecoding)"
 #   ./install-service.sh --update-venv           # Only refresh the venv, in place
 #   ./install-service.sh -u --update-venv        # Upgrade code, reuse the venv
 #
@@ -79,6 +80,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Parse command line arguments (before sudo check so help works)
 UPGRADE_MODE=false
 UPDATE_VENV=false
+INSTALL_EXTRAS=false
 for arg in "$@"; do
     case $arg in
         --upgrade|-u)
@@ -86,6 +88,9 @@ for arg in "$@"; do
             ;;
         --update-venv)
             UPDATE_VENV=true
+            ;;
+        --install-extras|-ie)
+            INSTALL_EXTRAS=true
             ;;
         --help|-h)
             echo "MeshCore Bot Service Installation Script"
@@ -105,6 +110,7 @@ for arg in "$@"; do
             echo "  $0                     # Normal installation (non-destructive if already installed)"
             echo "  $0 --upgrade           # Upgrade existing installation (rebuilds the venv)"
             echo "  $0 -u                  # Short form of --upgrade"
+            echo "  $0 -u --install-extras # upgrade + install optional packages (profantiy, geodecoding)"
             echo "  $0 --update-venv       # Refresh dependencies only, keeping the venv"
             echo "  $0 -u --update-venv    # Upgrade code and refresh the venv in place"
             exit 0
@@ -533,7 +539,7 @@ else
     else
         print_warning "User $SERVICE_USER already exists (skipping creation)"
     fi
-    
+
     # Add user to dialout group for serial port access (Linux)
     print_info "Configuring serial port access permissions"
     if getent group dialout > /dev/null 2>&1; then
@@ -547,7 +553,7 @@ else
         print_warning "dialout group not found - serial port access may require manual configuration"
         print_info "If using serial connection, you may need to: sudo usermod -a -G dialout $SERVICE_USER"
     fi
-    
+
     # Also check for other common serial port groups (tty, uucp, lock)
     for group in tty uucp lock; do
         if getent group "$group" > /dev/null 2>&1; then
@@ -818,6 +824,19 @@ fi
 VENV_PYTHON="$INSTALL_DIR/venv/bin/python"
 if [[ "$VENV_UPDATED_IN_PLACE" == true ]]; then
     print_info "Kept any optional packages already installed in the virtualenv"
+elif [[ "$INSTALL_EXTRAS" == true ]]; then
+    print_info "Installing profanity filter packages..."
+        if "$VENV_PYTHON" -m pip install --quiet "better-profanity>=0.7.0" "unidecode>=1.3.0"; then
+            print_success "Installed profanity filter packages"
+        else
+            print_warning "Failed to install profanity filter packages (non-fatal)"
+        fi
+   print_info "Installing geocoding extras..."
+        if "$VENV_PYTHON" -m pip install --quiet "pycountry>=23.12.0" "us>=2.0.0"; then
+            print_success "Installed geocoding extras"
+        else
+            print_warning "Failed to install geocoding extras (non-fatal)"
+        fi
 else
     echo ""
     print_info "Optional feature packages are available:"
@@ -847,6 +866,7 @@ else
         print_info "Skipping geocoding extras"
     fi
 fi
+
 
 print_section "Step 5: Setting File Permissions"
 print_info "Configuring file ownership and permissions for security"
@@ -898,7 +918,7 @@ if [[ "$IS_MACOS" == true ]]; then
     print_info "The service will be configured to start on boot and restart on failure"
     # Create LaunchDaemons directory if it doesn't exist
     mkdir -p "$LAUNCHD_DIR"
-    
+
     # Update plist with actual installation paths and copy to LaunchDaemons
     if [ -f "$LAUNCHD_DIR/$SERVICE_FILE" ] && [[ "$UPGRADE_MODE" != true ]]; then
         print_info "Plist file already exists at $LAUNCHD_DIR/$SERVICE_FILE"
@@ -926,12 +946,12 @@ with open('$LAUNCHD_DIR/$SERVICE_FILE', 'w') as f:
         fi
         print_success "Copied and configured plist file to $LAUNCHD_DIR/"
     fi
-    
+
     # Set ownership
     chown root:wheel "$LAUNCHD_DIR/$SERVICE_FILE"
     chmod 644 "$LAUNCHD_DIR/$SERVICE_FILE"
     print_success "Set plist permissions"
-    
+
     print_section "Step 7: Loading Service"
     # Check if service is already loaded
     if launchctl list "$PLIST_NAME" &>/dev/null; then
@@ -984,7 +1004,7 @@ else
         systemctl daemon-reload
         print_success "Systemd configuration reloaded"
     fi
-    
+
     print_section "Step 7: Enabling Service"
     # Check if service is already enabled
     if systemctl is-enabled "$SERVICE_NAME" &>/dev/null; then
