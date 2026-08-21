@@ -282,7 +282,7 @@ When no location is given, uses the sender's companion location if known, then t
 
 ### `airplanes [location] [options]` / `overhead [lat,lon]`
 
-Get aircraft tracking information using ADS-B data from airplanes.live or compatible APIs.
+Get aircraft tracking information using ADS-B data from adsb.lol or any compatible readsb/ADSBExchange v2 API.
 
 **Aliases:** `aircraft`, `planes`, `adsb`, `overhead`
 
@@ -342,12 +342,12 @@ airplanes 47.6,-122.3 radius=25 closest
 **Configuration:**
 The command can be configured in `config.ini` under `[Airplanes_Command]`:
 - `enabled` - Enable/disable the command
-- `api_url` - API endpoint URL (default: `http://api.airplanes.live/v2/`)
+- `api_url` - API endpoint URL (default: `https://api.adsb.lol/v2/`). Existing configs that still point at `api.airplanes.live` are remapped to this default. A local readsb instance or any other host is left as-is.
 - `default_radius` - Default search radius in nautical miles
 - `max_results` - Maximum number of results to return
 - `url_timeout` - API request timeout in seconds
 
-**Note:** Uses companion location from database if available, otherwise falls back to bot location from config. The API is rate-limited to 1 request per second.
+**Note:** Uses companion location from database if available, otherwise falls back to bot location from config. Keep the command cooldown at 2 seconds to stay within typical public ADS-B rate limits.
 
 ---
 

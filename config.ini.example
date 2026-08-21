@@ -1383,14 +1383,14 @@ announce.other = This is a different announcement on another topic.
 # Enable or disable the airplanes command (true/false)
 enabled = true
 
-# API endpoint URL for ADS-B aircraft data
-# Default: airplanes.live API
-# Supports any standardized ADS-B API using readsb/airplanes.live format
+# API endpoint URL for ADS-B aircraft data (readsb / ADSBExchange v2 format)
+# Default: adsb.lol. The previous public airplanes.live API now returns 403
+# for unregistered clients; that host is remapped to this default at runtime.
+# A local readsb URL or any other host is left unchanged.
 # Examples:
-#   http://api.airplanes.live/v2/ (default)
-#   https://adsbexchange-com1.p.rapidapi.com/v2/ (if compatible)
+#   https://api.adsb.lol/v2/ (default)
 #   http://localhost:8080/data/ (local readsb instance)
-api_url = http://api.airplanes.live/v2/
+api_url = https://api.adsb.lol/v2/
 
 # Default search radius in nautical miles
 # Maximum: 250 nautical miles

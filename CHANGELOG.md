@@ -13,6 +13,11 @@ semantic versioning.
   adverts. Empty-path adverts are stored in `observed_paths` with SNR/RSSI;
   neighbor-discover cycles refresh SNR on those rows. A one-time backfill
   copies recent zero-hop ADVERTs out of `packet_stream`.
+- **Airplanes / ADS-B** no longer depends on the public airplanes.live API,
+  which now returns HTTP 403 for unregistered clients (#244). Default
+  endpoint is `https://api.adsb.lol/v2/`; existing `api_url` values pointing
+  at `api.airplanes.live` are remapped automatically. Local readsb URLs are
+  unchanged.
 
 ### Added
 
