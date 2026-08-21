@@ -473,6 +473,7 @@ class TestSendDMRecipientResolution:
                 "public_key": "ffffdeadbeefcafebabe",
             }
         }
+        cm_bot.meshcore.pending_contacts = {}
         cm_bot.bot_tx_rate_limiter.wait_for_tx = AsyncMock(return_value=None)
         manager = make_manager(cm_bot)
 
@@ -482,6 +483,35 @@ class TestSendDMRecipientResolution:
         cm_bot.meshcore.get_contact_by_name.assert_called_once_with("ab12")
         cm_bot.logger.error.assert_called()
         assert "Contact not found for DM recipient identifier" in cm_bot.logger.error.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_send_dm_resolves_pending_contact_by_pubkey_prefix(self, cm_bot):
+        """NEW_CONTACT peers live in pending_contacts until the next get_contacts()."""
+        from meshcore import EventType
+
+        cm_bot.connected = True
+        cm_bot.meshcore = Mock()
+        cm_bot.meshcore.get_contact_by_name = Mock(return_value=None)
+        cm_bot.meshcore.contacts = {}
+        pending_key = "3a2418b4ad42cafebabe0123456789abcdef0123456789abcdef0123456789"
+        cm_bot.meshcore.pending_contacts = {
+            pending_key: {
+                "name": "NewCompanion",
+                "adv_name": "NewCompanion",
+                "public_key": pending_key,
+            }
+        }
+        cm_bot.meshcore.commands = Mock(spec=["send_msg"])
+        cm_bot.meshcore.commands.send_msg = AsyncMock(return_value=Mock(type=EventType.MSG_SENT, payload=None))
+        cm_bot.bot_tx_rate_limiter.wait_for_tx = AsyncMock(return_value=None)
+        manager = make_manager(cm_bot)
+
+        result = await manager.send_dm("3a2418b4ad42", "Pong!")
+
+        assert result is True
+        sent_contact = cm_bot.meshcore.commands.send_msg.await_args.args[0]
+        assert sent_contact["public_key"] == pending_key
+        assert sent_contact["name"] == "NewCompanion"
 
     @pytest.mark.asyncio
     async def test_send_response_dm_uses_sender_pubkey_over_name(self, cm_bot):

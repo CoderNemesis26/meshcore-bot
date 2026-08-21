@@ -1080,23 +1080,36 @@ class CommandManager:
             return False
 
         try:
-            # Name lookup first (backward compatible), then fallback to pubkey/prefix.
+            # Name lookup first (backward compatible), then pubkey/prefix in the
+            # radio snapshot and NEW_CONTACT pending list (not yet in contacts).
             contact = self.bot.meshcore.get_contact_by_name(recipient_id)
             lookup_type = "name"
-            if not contact and hasattr(self.bot.meshcore, "contacts"):
+            if not contact:
                 recipient_key = (recipient_id or "").strip()
-                contacts = self.bot.meshcore.contacts or {}
-                for contact_data in contacts.values():
-                    public_key = (contact_data.get("public_key", "") or "").strip()
-                    if not public_key:
-                        continue
-                    if public_key == recipient_key or public_key.startswith(recipient_key):
-                        contact = contact_data
-                        lookup_type = "pubkey_prefix"
-                        self.logger.debug(
-                            "Resolved DM recipient '%s' via public key prefix lookup",
-                            sanitize_name(recipient_key),
-                        )
+                sources: list[tuple[str, dict[str, Any]]] = []
+                contacts = getattr(self.bot.meshcore, "contacts", None)
+                if isinstance(contacts, dict) and contacts:
+                    sources.append(("pubkey_prefix", contacts))
+                pending = getattr(self.bot.meshcore, "pending_contacts", None)
+                if isinstance(pending, dict) and pending:
+                    sources.append(("pending_contact", pending))
+                for source_name, source in sources:
+                    for contact_data in source.values():
+                        if not isinstance(contact_data, dict):
+                            continue
+                        public_key = (contact_data.get("public_key", "") or "").strip()
+                        if not public_key:
+                            continue
+                        if public_key == recipient_key or public_key.startswith(recipient_key):
+                            contact = contact_data
+                            lookup_type = source_name
+                            self.logger.debug(
+                                "Resolved DM recipient '%s' via %s lookup",
+                                sanitize_name(recipient_key),
+                                source_name,
+                            )
+                            break
+                    if contact:
                         break
 
             if not contact:
