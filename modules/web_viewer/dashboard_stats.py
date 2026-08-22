@@ -1338,7 +1338,7 @@ class DashboardStatsService:
                     "name": (contact["name"] if contact else None) or key[:12],
                     "public_key": (contact["public_key"] if contact else key),
                     "role": normalize_role(contact["role"] if contact else None),
-                    "snr": round(float(snr), 1) if corroborated else None,
+                    "snr": round(float(snr), 1) if snr is not None else None,
                     "rssi": None,
                     "signal_corroborated": corroborated,
                     "last_seen": link.get("last_seen"),
