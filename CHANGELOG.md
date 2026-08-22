@@ -60,6 +60,13 @@ semantic versioning.
   that had never been time-synced was the *first* candidate for eviction. Unknown
   staleness is no longer grounds for removal.
 
+### Changed
+
+- Web viewer navigation is grouped: Radio, Scheduled Messages, Greeter, Feeds, Plugins
+  and Configuration now sit under a single **Settings** gear menu, leaving Dashboard,
+  Real-time, Contacts, Mesh Graph and Logs on the bar. The current page is highlighted,
+  including the gear when a settings page is open.
+
 ### Added
 
 - **Scheduled messages can be managed from the web viewer** (#174). A new Schedule page
