@@ -8,6 +8,15 @@ semantic versioning.
 
 ### Fixed
 
+- `message_stats.path` no longer reports another packet's route (#80). When RF
+  correlation failed, `find_recent_rf_data` fell back to the most recent packet in the
+  cache, and the caller attributed that packet's route to the message — which is how a
+  multi-hop message was occasionally recorded as a single direct hop. Correlation
+  results are now tagged with how they were matched, and an uncorrelated fallback is no
+  longer allowed to supply a route for either channel messages or DMs. The route is
+  left unresolved instead of being fabricated. This also stopped a wrong edge being
+  written to the mesh graph, and stopped the `path` command receiving another packet's
+  `routing_info`. SNR and RSSI still use the fallback as before.
 - Dashboard **One-hop neighbours** now lists radios this node heard directly
   (MeshCore hop count 0: empty RF path), not originators of 1-hop relayed
   adverts. Empty-path adverts are stored in `observed_paths` with SNR/RSSI;

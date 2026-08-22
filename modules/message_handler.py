@@ -24,6 +24,23 @@ from .utils import (
     format_elapsed_display,
 )
 
+# How a cached RF entry was matched to a message, recorded on the dict returned by
+# MessageHandler.find_recent_rf_data. Anything other than a fallback is known to be
+# this message's own packet; a fallback is merely the most recent packet heard, so its
+# route belongs to some other transmission and must not be attributed (issue #80).
+RF_MATCH_KEY = "_rf_match"
+RF_MATCH_EXACT = "exact"
+RF_MATCH_PUBKEY = "pubkey"
+RF_MATCH_PARTIAL = "partial"
+RF_MATCH_FALLBACK = "fallback"
+
+
+def rf_data_is_correlated(rf_data: dict | None) -> bool:
+    """True when rf_data is known to be this message's packet, not a fallback guess."""
+    if not rf_data:
+        return False
+    return rf_data.get(RF_MATCH_KEY, RF_MATCH_FALLBACK) != RF_MATCH_FALLBACK
+
 
 class PendingMessageEntry(TypedDict):
     data: dict[str, Any]
@@ -574,8 +591,17 @@ class MessageHandler:
             else:
                 recent_rf_data = self.find_recent_rf_data()
 
-            # If we have RF data with routing information, update the path with that instead
-            if recent_rf_data and recent_rf_data.get("routing_info"):
+            # If we have RF data with routing information, update the path with that
+            # instead — but only when the RF data is known to be this message's packet.
+            # An uncorrelated fallback is simply the most recent packet heard, and
+            # attributing its route here misreports the DM's path and feeds a wrong
+            # routing_info to the path command (#80).
+            if recent_rf_data and not rf_data_is_correlated(recent_rf_data):
+                self.logger.debug(
+                    "Skipping RF routing for this DM: correlation was a fallback, "
+                    "so the route belongs to a different packet"
+                )
+            elif recent_rf_data and recent_rf_data.get("routing_info"):
                 rf_routing = recent_rf_data["routing_info"]
                 message.routing_info = rf_routing  # Path command uses this for multi-byte path (no re-parse)
                 if rf_routing.get("path_length", 0) > 0:
@@ -1476,6 +1502,12 @@ class MessageHandler:
             scope_eligible_only: When True, only return TC_FLOOD / GRP_TXT rows suitable
                 for flood_scopes HMAC matching. Strategy 4 (most-recent fallback) skips
                 unrelated packets such as ADVERT.
+
+        Returns:
+            A shallow copy of the cached RF entry with ``RF_MATCH_KEY`` describing how it
+            was found: "exact", "pubkey", "partial", or "fallback". A "fallback" result is
+            the most recent packet in the cache and is **not** known to be this message's
+            packet, so its route must not be attributed to the message (see issue #80).
         """
         import time
 
@@ -1492,17 +1524,18 @@ class MessageHandler:
             self.logger.debug(f"No recent RF data found within {max_age_seconds}s window")
             return None
 
-        def _accept(data: dict[str, Any]) -> dict[str, Any] | None:
+        def _accept(data: dict[str, Any], how: str) -> dict[str, Any] | None:
             if scope_eligible_only and not self._is_rf_data_scope_eligible(data):
                 return None
-            return data
+            # Shallow copy so the provenance tag never persists into the cache.
+            return {**data, RF_MATCH_KEY: how}
 
         # Strategy 1: Try exact packet prefix match first (for RF data correlation)
         if correlation_key:
             for data in recent_data:
                 rf_packet_prefix = data.get("packet_prefix", "") or ""
                 if rf_packet_prefix == correlation_key:
-                    accepted = _accept(data)
+                    accepted = _accept(data, RF_MATCH_EXACT)
                     if accepted:
                         self.logger.debug(f"Found exact packet prefix match: {rf_packet_prefix}")
                         return accepted
@@ -1512,7 +1545,7 @@ class MessageHandler:
             for data in recent_data:
                 rf_pubkey_prefix = data.get("pubkey_prefix", "") or ""
                 if rf_pubkey_prefix == correlation_key:
-                    accepted = _accept(data)
+                    accepted = _accept(data, RF_MATCH_PUBKEY)
                     if accepted:
                         self.logger.debug(f"Found exact pubkey prefix match: {rf_pubkey_prefix}")
                         return accepted
@@ -1524,7 +1557,7 @@ class MessageHandler:
                 # Check for partial match (at least 16 characters)
                 min_length = min(len(rf_packet_prefix), len(correlation_key), 16)
                 if rf_packet_prefix[:min_length] == correlation_key[:min_length] and min_length >= 16:
-                    accepted = _accept(data)
+                    accepted = _accept(data, RF_MATCH_PARTIAL)
                     if accepted:
                         self.logger.debug(
                             f"Found partial packet prefix match: {rf_packet_prefix[:16]}... "
@@ -1555,7 +1588,7 @@ class MessageHandler:
                 self.logger.debug(
                     f"Using most recent RF data (fallback): {packet_prefix} at {most_recent['timestamp']}"
                 )
-            return most_recent
+            return {**most_recent, RF_MATCH_KEY: RF_MATCH_FALLBACK}
 
         return None
 
@@ -2211,7 +2244,19 @@ class MessageHandler:
                 packet_hash = recent_rf_data.get("packet_hash")
                 if packet_hash and packet_info:
                     packet_info["packet_hash"] = packet_hash
-                if packet_info and packet_info.get("path_len") is not None:
+
+                # A fallback correlation is just the most recent packet heard, not this
+                # message's packet. Attributing its route here is how a multi-hop message
+                # ended up recorded as a single direct hop (#80) — and it would write a
+                # fabricated edge into the mesh graph. Leave the route unknown instead.
+                route_is_attributable = rf_data_is_correlated(recent_rf_data)
+                if not route_is_attributable:
+                    self.logger.debug(
+                        "RF data for this channel message is an uncorrelated fallback; "
+                        "not attributing its route (hops/path left unresolved)"
+                    )
+
+                if route_is_attributable and packet_info and packet_info.get("path_len") is not None:
                     hops = packet_info.get("path_len", 0)
                     if packet_info.get("payload_type") == 9:  # TRACE packet
                         path_info = packet_info.get("path_info", {})
