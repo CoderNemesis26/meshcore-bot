@@ -23,6 +23,11 @@ semantic versioning.
 
 - Migration 23: nullable `snr` / `rssi` columns on `observed_paths` for
   zero-hop advert rows.
+- `[PacketCapture] observer_name` — an optional name reported as the `origin` of
+  MQTT packet and status payloads. It lets the observer/analyzer identity differ
+  from the MeshCore RF node, which is useful when one bot name is already taken
+  by the radio's advertised name. Unset (the default) keeps the previous
+  behavior: the connected device name, falling back to `[Bot] bot_name`.
 
 ## [1.0.0] — 2026-08-07
 

@@ -50,6 +50,10 @@ mqtt_skip_unparseable_packets = true   # Skip MQTT when content hash is all zero
 # Optional: skip MQTT for ADVERT packets whose Ed25519 signature does not verify (damaged or spoofed mesh payload).
 # Does not affect file/JSONL capture.
 advert_require_valid_signature = false
+
+# Optional name reported as the MQTT observer "origin".
+# Defaults to the connected MeshCore device/bot name.
+observer_name = CustomObserverBot
 ```
 
 ### Authentication
