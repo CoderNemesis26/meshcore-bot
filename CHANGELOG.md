@@ -20,6 +20,15 @@ semantic versioning.
   unchanged.
 - `cmd` no longer lists commands that are disabled in `config.ini`. Commands
   with no `[<Name>_Command]` section at all are still listed, as before.
+- Stale-contact cleanup no longer retries forever (#176). When the device refuses to
+  remove a contact the contact stays in the list, so every sweep re-selected it and
+  logged the same failure again — hundreds of `Failed to remove stale contact` warnings
+  that only a restart cleared. A contact is now dropped from cleanup after
+  3 consecutive refusals, with one summary warning explaining that the list may stay
+  near its limit. A successful removal clears the count.
+- Contacts whose `last_seen` is unset (parsing as 1970) or in the future are no longer
+  treated as stale. They sorted to the top of the staleness list and consumed the whole
+  per-sweep removal budget, crowding out contacts that could actually be removed.
 
 ### Added
 

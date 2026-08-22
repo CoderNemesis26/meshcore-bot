@@ -107,6 +107,15 @@ def validate_repeater_tables(db_manager: Any, logger: Any) -> None:
 class RepeaterManager:
     """Manages repeater contacts database and purging operations"""
 
+    # A contact the device keeps refusing is dropped from future sweeps after this many
+    # consecutive failures, so one unremovable contact cannot generate warnings forever.
+    MAX_STALE_REMOVAL_ATTEMPTS = 3
+
+    # last_seen values at or before this are not real observations (a zero/unset
+    # timestamp parses as 1970). They would otherwise sort to the top of the
+    # staleness list and consume the whole removal budget every sweep.
+    MIN_PLAUSIBLE_LAST_SEEN = datetime(2020, 1, 1)
+
     def __init__(self, bot):
         self.bot = bot
         self.logger = bot.logger
@@ -117,6 +126,11 @@ class RepeaterManager:
 
         # Initialize repeater-specific tables
         self._init_repeater_tables()
+
+        # Public keys the device has refused to remove, and how many times. A refusal
+        # leaves the contact in place, so without this the next sweep re-selects the
+        # same contacts and retries forever (see issue #176).
+        self._stale_removal_failures: dict[str, int] = {}
 
         # Initialize auto-purge monitoring
         self.contact_limit = 300  # MeshCore device limit (will be updated from device info)
@@ -2711,12 +2725,32 @@ class RepeaterManager:
                             # Assume it's already a datetime object
                             last_seen_dt = last_seen
 
+                        now = datetime.now()
+
+                        # A zero/unset timestamp parses as 1970 and would otherwise sort
+                        # to the top of the list, spending the whole removal budget on
+                        # contacts whose staleness is not actually known. Same for a
+                        # timestamp in the future, which cannot be a past observation.
+                        if last_seen_dt < self.MIN_PLAUSIBLE_LAST_SEEN or last_seen_dt > now:
+                            self.logger.debug(
+                                "Ignoring implausible last_seen %r for contact %s",
+                                last_seen,
+                                sanitize_name(contact_data.get('name', 'Unknown')),
+                            )
+                            continue
+
                         if last_seen_dt < cutoff_date:
+                            public_key = contact_data.get('public_key', '')
+                            attempts = self._stale_removal_failures.get(public_key, 0)
+                            if public_key and attempts >= self.MAX_STALE_REMOVAL_ATTEMPTS:
+                                # Already given up on this one; excluded so it does not
+                                # keep occupying the removal budget or the warning log.
+                                continue
                             stale_contacts.append({
                                 'name': contact_data.get('name', contact_data.get('adv_name', 'Unknown')),
-                                'public_key': contact_data.get('public_key', ''),
+                                'public_key': public_key,
                                 'last_seen': last_seen,
-                                'days_stale': (datetime.now() - last_seen_dt).days
+                                'days_stale': (now - last_seen_dt).days
                             })
                     except Exception as e:
                         self.logger.debug(f"Error parsing timestamp for contact {sanitize_name(contact_data.get('name', 'Unknown'))}: {e}")
@@ -2784,6 +2818,7 @@ class RepeaterManager:
         """Remove stale contacts to free up space"""
         try:
             removed_count = 0
+            given_up = 0
 
             for contact in stale_contacts[:max_remove]:
                 try:
@@ -2805,6 +2840,7 @@ class RepeaterManager:
 
                     if result.type == EventType.OK:
                         removed_count += 1
+                        self._stale_removal_failures.pop(public_key, None)
                         self.logger.info(f"✅ Successfully removed stale contact: {contact_name}")
 
                         # Log the removal
@@ -2814,7 +2850,24 @@ class RepeaterManager:
                         )
                     else:
                         error_code = result.payload.get('error_code', 'unknown') if hasattr(result, 'payload') else 'unknown'
-                        self.logger.warning(f"❌ Failed to remove stale contact: {contact_name} - Error: {result.type}, Code: {error_code}")
+                        # A refusal leaves the contact on the device, so the next sweep
+                        # would pick it up again. Count the attempt and stop after a few.
+                        attempts = self._stale_removal_failures.get(public_key, 0) + 1
+                        self._stale_removal_failures[public_key] = attempts
+
+                        if attempts >= self.MAX_STALE_REMOVAL_ATTEMPTS:
+                            given_up += 1
+                            self.logger.warning(
+                                f"❌ Giving up on stale contact: {contact_name} - the device "
+                                f"refused removal {attempts} times (last error: {result.type}, "
+                                f"Code: {error_code}). It will be skipped from now on."
+                            )
+                        else:
+                            self.logger.warning(
+                                f"❌ Failed to remove stale contact: {contact_name} - "
+                                f"Error: {result.type}, Code: {error_code} "
+                                f"(attempt {attempts}/{self.MAX_STALE_REMOVAL_ATTEMPTS})"
+                            )
 
                     # Small delay between removals
                     await asyncio.sleep(1)
@@ -2822,6 +2875,14 @@ class RepeaterManager:
                 except Exception as e:
                     self.logger.error(f"Error removing stale contact {sanitize_name(contact.get('name', 'Unknown'))}: {e}")
                     continue
+
+            if given_up:
+                self.logger.warning(
+                    "%d stale contact(s) could not be removed by the device and are now "
+                    "excluded from cleanup. The contact list may stay near its limit; "
+                    "remove them from the companion app if space is needed.",
+                    given_up,
+                )
 
             return removed_count
 

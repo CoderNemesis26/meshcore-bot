@@ -1668,3 +1668,139 @@ class TestUpdateContactLimitFromDevice:
 
         assert rm.contact_limit == 300
         assert rm.auto_purge_threshold == 280
+
+
+class TestStaleContactRemovalStorm:
+    """Issue #176: a contact the device refuses stays in the list, so every sweep
+    re-selected it and logged the same failure forever."""
+
+    @staticmethod
+    def _manager(contacts):
+        mgr = object.__new__(RepeaterManager)
+        mgr.bot = SimpleNamespace(
+            meshcore=SimpleNamespace(contacts=contacts, commands=SimpleNamespace()),
+        )
+        mgr.logger = Mock()
+        mgr._stale_removal_failures = {}
+        mgr._is_repeater_device = lambda contact_data: False
+        mgr.log_purging_action = Mock()
+        return mgr
+
+    @staticmethod
+    def _contact(name, key, days_ago):
+        seen = (datetime.now() - timedelta(days=days_ago)).timestamp()
+        return {'name': name, 'public_key': key, 'last_seen': seen}
+
+    @staticmethod
+    def _result(ok):
+        if ok:
+            return SimpleNamespace(type=EventType.OK, payload={})
+        return SimpleNamespace(type=EventType.ERROR, payload={'error_code': 2})
+
+    def _refusing_device(self, mgr):
+        mgr.bot.meshcore.commands.remove_contact = AsyncMock(return_value=self._result(False))
+
+    @pytest.mark.asyncio
+    async def test_refused_contact_is_dropped_after_the_attempt_limit(self):
+        contacts = {'a': self._contact('variable', 'KEY_A', 30)}
+        mgr = self._manager(contacts)
+        self._refusing_device(mgr)
+
+        with patch('asyncio.sleep', new=AsyncMock()):
+            for _ in range(RepeaterManager.MAX_STALE_REMOVAL_ATTEMPTS):
+                stale = await mgr._get_stale_contacts()
+                assert stale, "should still be attempted before the limit"
+                await mgr._remove_stale_contacts(stale)
+
+            # The storm stops: the contact is no longer selected at all.
+            assert await mgr._get_stale_contacts() == []
+
+    @pytest.mark.asyncio
+    async def test_gives_up_message_is_logged_once(self):
+        contacts = {'a': self._contact('variable', 'KEY_A', 30)}
+        mgr = self._manager(contacts)
+        self._refusing_device(mgr)
+
+        with patch('asyncio.sleep', new=AsyncMock()):
+            for _ in range(RepeaterManager.MAX_STALE_REMOVAL_ATTEMPTS):
+                stale = await mgr._get_stale_contacts()
+                if stale:
+                    await mgr._remove_stale_contacts(stale)
+
+        warnings = [str(c) for c in mgr.logger.warning.call_args_list]
+        assert sum('Giving up' in w for w in warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_removal_clears_the_failure_count(self):
+        contacts = {'a': self._contact('flaky', 'KEY_A', 30)}
+        mgr = self._manager(contacts)
+        mgr.bot.meshcore.commands.remove_contact = AsyncMock(
+            side_effect=[self._result(False), self._result(True)]
+        )
+
+        with patch('asyncio.sleep', new=AsyncMock()):
+            await mgr._remove_stale_contacts(await mgr._get_stale_contacts())
+            assert mgr._stale_removal_failures.get('KEY_A') == 1
+            removed = await mgr._remove_stale_contacts(await mgr._get_stale_contacts())
+
+        assert removed == 1
+        assert 'KEY_A' not in mgr._stale_removal_failures
+
+    @pytest.mark.asyncio
+    async def test_other_contacts_are_unaffected_by_one_bad_apple(self):
+        contacts = {
+            'a': self._contact('stubborn', 'KEY_A', 40),
+            'b': self._contact('removable', 'KEY_B', 30),
+        }
+        mgr = self._manager(contacts)
+
+        async def remove(public_key):
+            return self._result(public_key != 'KEY_A')
+
+        mgr.bot.meshcore.commands.remove_contact = AsyncMock(side_effect=remove)
+
+        with patch('asyncio.sleep', new=AsyncMock()):
+            removed = await mgr._remove_stale_contacts(await mgr._get_stale_contacts())
+
+        assert removed == 1
+        assert mgr._stale_removal_failures == {'KEY_A': 1}
+
+
+class TestStaleContactTimestampSanity:
+    """Unset timestamps parse as 1970 and sorted to the top, spending the whole
+    removal budget on contacts whose real staleness is unknown."""
+
+    @staticmethod
+    def _manager(contacts):
+        return TestStaleContactRemovalStorm._manager(contacts)
+
+    @pytest.mark.asyncio
+    async def test_zero_timestamp_is_ignored(self):
+        mgr = self._manager({'a': {'name': 'never-heard', 'public_key': 'K', 'last_seen': 0}})
+        assert await mgr._get_stale_contacts() == []
+
+    @pytest.mark.asyncio
+    async def test_future_timestamp_is_ignored(self):
+        future = (datetime.now() + timedelta(days=5)).timestamp()
+        mgr = self._manager({'a': {'name': 'clock-skew', 'public_key': 'K', 'last_seen': future}})
+        assert await mgr._get_stale_contacts() == []
+
+    @pytest.mark.asyncio
+    async def test_genuinely_old_contact_is_still_selected(self):
+        """722 days ago is a real observation, not a bad timestamp."""
+        mgr = self._manager({'a': TestStaleContactRemovalStorm._contact('old', 'K', 722)})
+        stale = await mgr._get_stale_contacts()
+        assert len(stale) == 1
+        assert stale[0]['days_stale'] == 722
+
+    @pytest.mark.asyncio
+    async def test_junk_timestamps_no_longer_crowd_out_real_candidates(self):
+        contacts = {f'junk{i}': {'name': f'j{i}', 'public_key': f'J{i}', 'last_seen': 0}
+                    for i in range(12)}
+        contacts['real'] = TestStaleContactRemovalStorm._contact('real', 'REAL', 30)
+        mgr = self._manager(contacts)
+
+        stale = await mgr._get_stale_contacts()
+
+        # Without the guard the twelve 1970 entries sort first and fill max_remove=10.
+        assert [c['public_key'] for c in stale] == ['REAL']
