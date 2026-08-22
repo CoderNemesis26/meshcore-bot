@@ -204,3 +204,44 @@ class TestRoundTrip:
         raw = parser.get("Scheduled_Messages", "15 9 * * mon,fri")
         channel, message, scope = parse_scheduled_message_value(raw)
         assert (channel, message, scope) == ("Public", "Standup at 9:15", "#sea")
+
+
+class TestWriteSerialisation:
+    """Duplicate/existence checks must share the write's critical section, or a
+    concurrent request can slip between the check and the write."""
+
+    def test_concurrent_creates_of_one_schedule_yield_exactly_one_success(self, viewer):
+        import threading
+
+        results = []
+        barrier = threading.Barrier(2)
+
+        def create(body):
+            client = viewer.app.test_client()
+            barrier.wait()
+            resp = _post(client, "/api/scheduled-messages", body)
+            results.append(resp.status_code)
+
+        threads = [
+            threading.Thread(target=create, args=({
+                "schedule": "45 7 * * *", "channel": "Public", "message": f"msg {i}",
+            },)) for i in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert sorted(results) == [200, 409], results
+        # And exactly one entry landed, not one silently replacing the other.
+        assert _config_text(viewer).count("45 7 * * * =") == 1
+
+    def test_update_of_a_removed_entry_is_a_404_not_a_resurrection(self, viewer):
+        client = _client(viewer)
+        _post(client, "/api/scheduled-messages", {"schedule": "0 8 * * *"}, method="delete")
+        resp = _post(client, "/api/scheduled-messages", {
+            "original_schedule": "0 8 * * *", "schedule": "0 9 * * *",
+            "channel": "Public", "message": "back from the dead",
+        }, method="put")
+        assert resp.status_code == 404
+        assert "back from the dead" not in _config_text(viewer)

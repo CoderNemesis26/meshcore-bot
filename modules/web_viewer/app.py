@@ -4045,6 +4045,15 @@ class BotDataViewer:
                 return jsonify({'success': False, 'error': described.get('error')}), 400
 
             existing = _existing_schedules()
+
+            # Checked here rather than in the route so it shares this snapshot and the
+            # surrounding lock.
+            if replacing is not None and replacing not in existing:
+                return jsonify({
+                    'success': False,
+                    'error': f"No scheduled message for '{replacing}'",
+                }), 404
+
             # Schedules are INI keys, so two entries cannot share one. Renaming onto
             # another entry's key would silently overwrite it.
             if schedule in existing and schedule != replacing:
@@ -4114,8 +4123,9 @@ class BotDataViewer:
                 original = (data.get('original_schedule') or '').strip()
                 if not original:
                     return jsonify({'success': False, 'error': 'original_schedule is required'}), 400
-                if original not in _existing_schedules():
-                    return jsonify({'success': False, 'error': f"No scheduled message for '{original}'"}), 404
+                # Existence is verified inside the lock, against the same snapshot the
+                # duplicate check uses: a concurrent delete between an outside check and
+                # the write would otherwise resurrect the entry as a new one.
                 return _save_scheduled_message(data, replacing=original)
             except Exception as e:
                 self.logger.error(f"Error updating scheduled message: {e}")
