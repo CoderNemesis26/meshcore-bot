@@ -8,6 +8,12 @@ semantic versioning.
 
 ### Fixed
 
+- The web viewer's radio **Disconnect** button is now **Stop Bot** and asks for
+  confirmation first (#240). It never was a radio-only disconnect: the main loop runs
+  while the bot is connected, so disconnecting ended the process, which surprised at
+  least one operator running under `tmux` with nothing to restart it. The confirmation
+  spells out that the bot stops completely and only returns if systemd or Docker
+  restarts it.
 - Corrected the `[External_Data] repeater_prefix_api_url` comment, which claimed that
   leaving it empty "disables prefix command functionality" (#70). Empty is the normal
   setup: the prefix command answers from the bot's own database. The option only adds
@@ -56,6 +62,13 @@ semantic versioning.
 
 ### Added
 
+- **Scheduled messages can be managed from the web viewer** (#174). A new Schedule page
+  lists every `[Scheduled_Messages]` entry with its next run time and offers add, edit
+  and delete. Changes are written to `config.ini` and applied by a queued config reload,
+  so no restart is needed. The schedule builder composes the cron key from plain-language
+  options and previews the next five runs; entries the bot cannot run are shown as
+  **Not scheduled** with the reason rather than hidden. It edits the same config section
+  the bot already uses, so there is no second source of truth.
 - Documented installing with `pipx`, which sidesteps PEP 668 on Debian 12+, Ubuntu
   23.04+, Fedora and Arch (#222), including where `config.ini`, the database and
   `local/` live — everything resolves relative to the config file's directory, so an

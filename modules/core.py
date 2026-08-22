@@ -1828,7 +1828,16 @@ long_jokes = false
             self.logger.warning(f"Could not update radio_connected metadata: {e}")
 
     async def disconnect_radio(self) -> bool:
-        """Disconnect from radio. Called by scheduler via operation queue."""
+        """Disconnect from the radio, which also stops the bot.
+
+        Despite the name, this is not a radio-only operation: ``run()``ing loops
+        while ``self.connected`` is true, so clearing it ends the main loop and the
+        process exits. The web viewer therefore labels the control "Stop Bot" and
+        confirms first (issue #240). Keep that in mind before calling this from
+        anywhere that only means to drop the radio link.
+
+        Called by the scheduler via the operation queue.
+        """
         import asyncio
         try:
             if self.meshcore:

@@ -685,23 +685,39 @@ class RadioManager {
             btn.className = 'btn btn-secondary';
             txt.textContent = 'Status Unknown';
         } else if (this.radioConnected) {
+            // Not a radio-only disconnect: the bot's main loop runs while it is
+            // connected, so disconnecting ends the process. Label it honestly.
             btn.className = 'btn btn-danger';
-            txt.textContent = 'Disconnect';
+            txt.textContent = 'Stop Bot';
+            btn.title = 'Stops the bot process. It restarts only if managed by '
+                + 'systemd or Docker.';
         } else {
             btn.className = 'btn btn-success';
             txt.textContent = 'Connect';
+            btn.title = 'Reconnect the radio.';
         }
     }
 
     async handleConnectToggle() {
         const action = this.radioConnected ? 'disconnect' : 'connect';
+
+        if (action === 'disconnect' && !confirm(
+            'Stop the bot?\n\n'
+            + 'This shuts the bot down completely, not just the radio link. '
+            + 'It will stop responding on the mesh and this web viewer will '
+            + 'become unavailable.\n\n'
+            + 'It comes back only if something restarts it (systemd, Docker). '
+            + 'If you started it by hand, you will need to start it again the '
+            + 'same way.'
+        )) return;
+
         const spinner = document.getElementById('connectBtnSpinner');
         const btn = document.getElementById('connectToggleBtn');
         const txt = document.getElementById('connectBtnText');
 
         btn.disabled = true;
         spinner.style.display = 'inline-block';
-        txt.textContent = action === 'connect' ? 'Connecting...' : 'Disconnecting...';
+        txt.textContent = action === 'connect' ? 'Connecting...' : 'Stopping...';
 
         try {
             const response = await fetch('/api/radio/connect', {
@@ -739,7 +755,7 @@ class RadioManager {
         for (let attempts = 0; attempts < maxWait; attempts++) {
             await new Promise(resolve => setTimeout(resolve, 2000));
             const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            txt.textContent = `${action === 'connect' ? 'Connecting' : 'Disconnecting'}... (${elapsed}s)`;
+            txt.textContent = `${action === 'connect' ? 'Connecting' : 'Stopping'}... (${elapsed}s)`;
 
             try {
                 const response = await fetch(`/api/channel-operations/${operationId}`);
@@ -748,13 +764,13 @@ class RadioManager {
                 if (result.status === 'completed') {
                     spinner.style.display = 'none';
                     await this.loadRadioStatus();
-                    this.showSuccess(`Radio ${action}ed successfully`);
+                    this.showSuccess(action === 'connect' ? 'Radio connected successfully' : 'Bot stopping…');
                     return;
                 } else if (result.status === 'failed' || result.status === 'interrupted') {
                     spinner.style.display = 'none';
                     btn.disabled = false;
                     this.updateConnectButton();
-                    this.showError(result.error_message || `Failed to ${action} radio`);
+                    this.showError(result.error_message || (action === 'connect' ? 'Failed to connect radio' : 'Failed to stop bot'));
                     return;
                 }
             } catch (error) {

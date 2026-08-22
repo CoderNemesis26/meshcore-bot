@@ -54,6 +54,15 @@ from modules.db_retention import (
     retention_delete_settings,
 )
 from modules.ini_writer import IniValueError, update_ini_values
+from modules.scheduled_message_admin import (
+    SECTION as SCHEDULED_MESSAGES_SECTION,
+)
+from modules.scheduled_message_admin import (
+    compose_value,
+    describe_schedule,
+    read_entries,
+    validate_entry,
+)
 from modules.security_utils import (
     SafeUrlPolicy,
     create_safe_requests_session,
@@ -1352,6 +1361,11 @@ class BotDataViewer:
         def feeds():
             """Feed management page"""
             return render_template('feeds.html')
+
+        @self.app.route('/schedule')
+        def schedule_page():
+            """Scheduled message management page"""
+            return render_template('schedule.html')
 
         @self.app.route('/radio')
         def radio():
@@ -3954,6 +3968,157 @@ class BotDataViewer:
                     conn.close()
 
         # Feed management API endpoints
+        def _schedule_tz():
+            from modules.utils import get_config_timezone
+            tz, _name = get_config_timezone(self.config, self.logger)
+            return tz
+
+        def _queue_config_reload():
+            """Ask the bot to re-read config.ini; it re-registers scheduled jobs."""
+            try:
+                with self.db_manager.connection() as conn:
+                    conn.cursor().execute(
+                        "INSERT INTO channel_operations (operation_type, status) "
+                        "VALUES ('config_reload', 'pending')"
+                    )
+                    conn.commit()
+                return True
+            except Exception:
+                self.logger.exception("Failed to queue config reload")
+                return False
+
+        def _existing_schedules():
+            return {e['schedule'] for e in read_entries(self.config_path, _schedule_tz())}
+
+        @self.app.route('/api/scheduled-messages')
+        def api_scheduled_messages():
+            """List scheduled messages with their next run times."""
+            try:
+                return jsonify({'entries': read_entries(self.config_path, _schedule_tz())})
+            except Exception as e:
+                self.logger.error(f"Error reading scheduled messages: {e}")
+                return jsonify({'error': str(e)}), 500
+
+        @self.app.route('/api/scheduled-messages/preview', methods=['POST'])
+        def api_scheduled_messages_preview():
+            """Validate a schedule and return its next run times (powers the builder)."""
+            try:
+                data = request.get_json(silent=True) or {}
+                return jsonify(describe_schedule(
+                    data.get('schedule', ''),
+                    _schedule_tz(),
+                    message=data.get('message', ''),
+                    count=int(data.get('count', 5)),
+                ))
+            except Exception as e:
+                self.logger.error(f"Error previewing schedule: {e}")
+                return jsonify({'error': str(e)}), 500
+
+        def _save_scheduled_message(data, *, replacing=None):
+            """Shared create/update: validate, write config.ini, queue a reload."""
+            schedule = (data.get('schedule') or '').strip()
+            channel = (data.get('channel') or '').strip()
+            message = (data.get('message') or '').strip()
+            scope = (data.get('scope') or '').strip() or None
+
+            field_error = validate_entry(channel, message, scope)
+            if field_error:
+                return jsonify({'success': False, 'error': field_error}), 400
+
+            described = describe_schedule(schedule, _schedule_tz(), message=message)
+            if not described.get('valid'):
+                return jsonify({'success': False, 'error': described.get('error')}), 400
+
+            existing = _existing_schedules()
+            # Schedules are INI keys, so two entries cannot share one. Renaming onto
+            # another entry's key would silently overwrite it.
+            if schedule in existing and schedule != replacing:
+                return jsonify({
+                    'success': False,
+                    'error': (
+                        f"A scheduled message already exists for '{schedule}'. "
+                        "Edit that one, or use a different schedule."
+                    ),
+                }), 409
+
+            updates = {SCHEDULED_MESSAGES_SECTION: {schedule: compose_value(channel, message, scope)}}
+            deletes = None
+            if replacing and replacing != schedule:
+                deletes = {SCHEDULED_MESSAGES_SECTION: [replacing]}
+
+            try:
+                summary = update_ini_values(self.config_path, updates, deletes)
+            except IniValueError as exc:
+                return jsonify({'success': False, 'error': str(exc)}), 400
+            except OSError as exc:
+                self.logger.error("Failed to write scheduled message: %s", exc)
+                return jsonify({
+                    'success': False,
+                    'error': 'Could not write config.ini — check file permissions',
+                }), 500
+
+            reloaded = _queue_config_reload()
+            self.logger.info(
+                "Scheduled message saved: %r -> %s:%s (backup=%s)",
+                schedule, channel, message[:40],
+                os.path.basename(summary.get('backup_path') or '') or 'none',
+            )
+            return jsonify({
+                'success': True,
+                'reload_queued': reloaded,
+                'entry': {'schedule': schedule, 'channel': channel,
+                          'scope': scope, 'message': message, **described},
+            })
+
+        @self.app.route('/api/scheduled-messages', methods=['POST'])
+        def api_create_scheduled_message():
+            """Create a scheduled message."""
+            try:
+                return _save_scheduled_message(request.get_json(silent=True) or {})
+            except Exception as e:
+                self.logger.error(f"Error creating scheduled message: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/scheduled-messages', methods=['PUT'])
+        def api_update_scheduled_message():
+            """Update a scheduled message, including changing its schedule."""
+            try:
+                data = request.get_json(silent=True) or {}
+                original = (data.get('original_schedule') or '').strip()
+                if not original:
+                    return jsonify({'success': False, 'error': 'original_schedule is required'}), 400
+                if original not in _existing_schedules():
+                    return jsonify({'success': False, 'error': f"No scheduled message for '{original}'"}), 404
+                return _save_scheduled_message(data, replacing=original)
+            except Exception as e:
+                self.logger.error(f"Error updating scheduled message: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/scheduled-messages', methods=['DELETE'])
+        def api_delete_scheduled_message():
+            """Delete a scheduled message."""
+            try:
+                data = request.get_json(silent=True) or {}
+                schedule = (data.get('schedule') or '').strip()
+                if not schedule:
+                    return jsonify({'success': False, 'error': 'schedule is required'}), 400
+                if schedule not in _existing_schedules():
+                    return jsonify({'success': False, 'error': f"No scheduled message for '{schedule}'"}), 404
+                try:
+                    update_ini_values(self.config_path, {}, {SCHEDULED_MESSAGES_SECTION: [schedule]})
+                except OSError as exc:
+                    self.logger.error("Failed to delete scheduled message: %s", exc)
+                    return jsonify({
+                        'success': False,
+                        'error': 'Could not write config.ini — check file permissions',
+                    }), 500
+                reloaded = _queue_config_reload()
+                self.logger.info("Scheduled message deleted: %r", schedule)
+                return jsonify({'success': True, 'reload_queued': reloaded})
+            except Exception as e:
+                self.logger.error(f"Error deleting scheduled message: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
         @self.app.route('/api/feeds')
         def api_feeds():
             """Get all feed subscriptions with statistics"""

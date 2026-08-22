@@ -207,6 +207,16 @@ Admins can DM **`channelpause`** or **`channelresume`** (see `[Admin_ACL]` in `c
 
 Each entry is `<schedule_key> = <value>` where the value is normally **`channel:message`** (first colon separates channel from body). For **regional flood scope** on that send only, use **`channel:#scope:message`**: the middle segment must start with `#` (same convention as `flood_scopes` / `outgoing_flood_scope_override`). The message body may contain more colons. Omit the middle field for classic global flood. See `config.ini.example` under `[Scheduled_Messages]` for examples. The **`schedule`** command lists each job with `(#scope)` when set.
 
+### Managing schedules from the web viewer
+
+The **Schedule** page in the web viewer edits this section for you. It writes `config.ini` and queues a config reload, so new and changed schedules take effect **without restarting the bot**.
+
+It is an editor for the same `[Scheduled_Messages]` section, not a separate store, so entries added by hand and entries added in the UI are the same thing and the `schedule` command lists both.
+
+The editor builds the cron key from plain-language options (every day at a time, several times a day, certain days of the week, every N hours or minutes) and shows the resolved expression plus the next five run times before you save. "Advanced (cron)" accepts a raw expression. Existing entries always open in Advanced so a stored expression is never silently rewritten.
+
+Schedules that the bot cannot run are listed rather than hidden, marked **Not scheduled** with the reason, so a typo that stops a message from airing is visible instead of silent. The 15-minute floor for `{cmd:...}` messages is enforced in the editor too, so it is refused when you save rather than dropped later at startup.
+
 ### Broadcasting a command's output (`{cmd:...}`)
 
 A scheduled message can embed the reply of any bot command with **`{cmd:<command> [args]}`**. The command runs for its text only — it transmits nothing itself — and the scheduled message carries the result. This is how you put a recurring forecast (or any other command) on the air without that command needing its own scheduling settings:
