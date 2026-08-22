@@ -1193,24 +1193,43 @@ class BaseCommand(ABC):
         hops_label = "1 hop" if hops_val == 1 else f"{hops_val} hops"
         return hops_str, hops_label
 
-    def format_response(self, message: MeshMessage, response_format: str) -> str:
-        """Format a response string with message data"""
-        try:
-            connection_info = self.build_enhanced_connection_info(message)
-            path_display = self.get_path_display_string(message)
-            hops, hops_label = self.get_hops_display_values(message)
-            timestamp = self.format_timestamp(message)
+    def get_standard_placeholder_fields(self, message: MeshMessage) -> dict[str, Any]:
+        """Standard response placeholders shared by every command template.
 
-            return response_format.format(
-                sender=message.sender_id or "Unknown",
-                connection_info=connection_info,
-                path=path_display,
-                hops=hops,
-                hops_label=hops_label,
-                timestamp=timestamp,
-                snr=message.snr or "Unknown",
-                rssi=message.rssi or "Unknown"
-            )
+        Subclasses that render templates through
+        :func:`~modules.response_template.format_piped_template` start from this
+        mapping and add their own fields, so the common names stay identical
+        across commands.
+        """
+        hops, hops_label = self.get_hops_display_values(message)
+        return {
+            'sender': message.sender_id or "Unknown",
+            'connection_info': self.build_enhanced_connection_info(message),
+            'path': self.get_path_display_string(message),
+            'hops': hops,
+            'hops_label': hops_label,
+            'timestamp': self.format_timestamp(message),
+            'snr': message.snr or "Unknown",
+            'rssi': message.rssi or "Unknown",
+        }
+
+    def format_response(self, message: MeshMessage, response_format: str,
+                        extra: Optional[dict[str, Any]] = None) -> str:
+        """Format a response string with message data.
+
+        Args:
+            message: The message the placeholders describe.
+            response_format: Template string using ``{placeholder}`` names.
+            extra: Additional command-specific placeholders. Values here are
+                merged over the standard set, so a command can expose fields
+                only it can compute (e.g. the path command's ``{distance}``).
+        """
+        try:
+            fields = self.get_standard_placeholder_fields(message)
+            if extra:
+                fields.update(extra)
+
+            return response_format.format(**fields)
         except (KeyError, ValueError) as e:
             self.logger.warning(f"Error formatting response: {e}")
             return response_format

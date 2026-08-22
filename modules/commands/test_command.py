@@ -644,12 +644,14 @@ class TestCommand(BaseCommand):
 
         return f"{distance:.1f}km"
 
-    def format_response(self, message: MeshMessage, response_format: str) -> str:
+    def format_response(self, message: MeshMessage, response_format: str,
+                        extra: Optional[dict[str, Any]] = None) -> str:
         """Override to handle phrase extraction.
 
         Args:
             message: The original message.
             response_format: The format string.
+            extra: Additional placeholders merged over this command's own fields.
 
         Returns:
             str: Formatted response string.

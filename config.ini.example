@@ -985,10 +985,17 @@ require_path_bytes_failure_response =
 # false: Only respond to "path", "decode", or "route" keywords
 enable_p_shortcut = true
 
-# Optional first line prepended to path command RF replies (Python str.format on the triggering message).
+# Optional first line prepended to path command RF replies.
 # Placeholders match keyword-style responses: {sender}, {connection_info}, {path},
-# {hops}, {hops_label}, {timestamp}, {snr}, {rssi}. Only the first RF chunk includes the prefix when the reply is split.
+# {hops}, {hops_label}, {timestamp}, {snr}, {rssi}, plus {path_distance}.
+# {path_distance} is the total distance travelled (sender -> hops -> bot), e.g. "12.4km".
+# It renders empty unless every node in the chain has known coordinates and the bot has
+# bot_latitude/bot_longitude set, so a partial sum is never mistaken for the full distance.
+# Feed-style pipe filters are supported (same engine as [Test_Command] response_format),
+# so a label can disappear along with an empty value.
+# Only the first RF chunk includes the prefix when the reply is split.
 # Example: @[{sender}]
+# Example: {path_distance|prefix_if_nonempty:\U0001F4CF }
 reply_prefix =
 
 # Bytes per hop required before resolving repeater names from the database.

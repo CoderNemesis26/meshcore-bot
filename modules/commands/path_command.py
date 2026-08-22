@@ -15,8 +15,10 @@ from ..path_inference import (
     select_node_repeater,
     select_repeater_by_graph,
 )
+from ..response_template import format_piped_template
 from ..utils import (
     bytes_per_hop_from_routing_and_nodes,
+    calculate_distance,
     parse_path_string,
     public_key_has_prefix,
 )
@@ -380,10 +382,29 @@ class PathCommand(BaseCommand):
         bph = self._bytes_per_hop_from_nodes_and_routing(node_ids, routing_info)
         return bph >= self.minimum_path_bytes
 
+    def _format_path_distance(self) -> str:
+        """Render the {path_distance} placeholder; empty when the path cannot be measured.
+
+        Matches the ``{path_distance}`` name and ``12.4km`` shape already used by the
+        test command, so one prefix template reads the same across both commands.
+        """
+        distance = getattr(self, '_last_path_distance_km', None)
+        if distance is None:
+            return ''
+        return f"{distance:.1f}km"
+
     def _format_path_reply_prefix(self, message: MeshMessage) -> str:
         if not self.path_reply_prefix:
             return ''
-        formatted = self.format_response(message, self.path_reply_prefix).rstrip()
+        fields = self.get_standard_placeholder_fields(message)
+        fields['path_distance'] = self._format_path_distance()
+        formatted = format_piped_template(
+            self.path_reply_prefix,
+            {k: str(v) for k, v in fields.items()},
+            message=message,
+            logger=self.logger,
+            prefix_hex_chars=getattr(self.bot, 'prefix_hex_chars', 2),
+        ).rstrip()
         if not formatted:
             return ''
         return formatted + '\n'
@@ -401,8 +422,10 @@ class PathCommand(BaseCommand):
     ) -> str:
         self.logger.info(f"Decoding path with {len(node_ids)} nodes: {','.join(node_ids)}")
         if not self._should_resolve_repeater_names(node_ids, routing_info):
+            self._last_path_distance_km = None
             return self._format_repeater_resolution_deferred(node_ids)
         repeater_info = await self._lookup_repeater_names(node_ids)
+        self._last_path_distance_km = self._calculate_path_distance_km(node_ids, repeater_info)
         return self._format_path_response(node_ids, repeater_info)
 
     def can_execute(self, message: MeshMessage, skip_channel_check: bool = False) -> bool:
@@ -904,6 +927,42 @@ class PathCommand(BaseCommand):
             graph_n=getattr(self.bot, 'prefix_hex_chars', 2),
             path_prefix_hex_chars=path_prefix_hex_chars,
         )
+
+    def _calculate_path_distance_km(
+        self, node_ids: list[str], repeater_info: dict[str, dict[str, Any]]
+    ) -> Optional[float]:
+        """Total distance along sender -> each hop -> bot, in kilometres.
+
+        Returns None when any node in the chain has no usable coordinates, since a
+        partial sum would understate the real distance travelled.
+        """
+        if self.bot_latitude is None or self.bot_longitude is None:
+            return None
+
+        chain: list[tuple[float, float]] = []
+
+        sender = self._get_sender_location()
+        if sender is None:
+            return None
+        chain.append(sender)
+
+        for node_id in node_ids:
+            info = repeater_info.get(node_id, {})
+            # A prefix collision has no single node to measure from.
+            if not info.get('found', False) or info.get('collision', False):
+                return None
+            lat = info.get('latitude')
+            lon = info.get('longitude')
+            if lat is None or lon is None or (lat == 0 and lon == 0):
+                return None
+            chain.append((lat, lon))
+
+        chain.append((self.bot_latitude, self.bot_longitude))
+
+        total = 0.0
+        for (lat1, lon1), (lat2, lon2) in zip(chain, chain[1:], strict=False):
+            total += calculate_distance(lat1, lon1, lat2, lon2)
+        return total
 
     def _format_path_response(self, node_ids: list[str], repeater_info: dict[str, dict[str, Any]]) -> str:
         """Format the path decode response

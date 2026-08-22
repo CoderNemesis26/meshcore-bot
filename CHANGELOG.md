@@ -25,6 +25,11 @@ semantic versioning.
 
 - Migration 23: nullable `snr` / `rssi` columns on `observed_paths` for
   zero-hop advert rows.
+- `{path_distance}` is now available in the path command's `[Path_Command] reply_prefix`,
+  reporting total distance travelled (sender → hops → bot, e.g. `12.4km`) and rendering
+  empty when any node in the chain has no usable coordinates. The prefix now supports the
+  same pipe filters as the test command's `response_format`, so
+  `{path_distance|prefix_if_nonempty:📏 }` drops the label along with the value.
 - `install-service.sh --install-extras` installs the optional profanity-filter and
   geocoding packages without prompting, for unattended installs and upgrades. It
   takes precedence over the in-place `--update-venv` path, so the two can be

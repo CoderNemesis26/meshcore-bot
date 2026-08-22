@@ -18,7 +18,13 @@ These options only affect the **path** command’s reply text and whether repeat
 **`reply_prefix`** (string, default empty)
 
 - Prepended as the first line of path command RF replies (only the **first** chunk when the reply is split for length).
-- Uses Python `str.format` on the **triggering** message. Placeholders: `{sender}`, `{connection_info}`, `{path}`, `{hops}`, `{hops_label}`, `{timestamp}`, `{snr}`, `{rssi}`.
+- Placeholders: `{sender}`, `{connection_info}`, `{path}`, `{hops}`, `{hops_label}`, `{timestamp}`, `{snr}`, `{rssi}`, `{path_distance}`.
+- `{path_distance}` is the total distance travelled, summed sender → each resolved hop → bot (e.g. `12.4km`). It is **empty** whenever the chain cannot be measured end to end: an unresolved hop, a prefix collision, a node with no stored coordinates, an unknown sender position, or no `[Bot] bot_latitude`/`bot_longitude`. A partial sum is never reported, since it would understate the real distance.
+- Supports the same **feed-style pipe filters** as the test command's `response_format` (see `modules/response_template.py`). Use `prefix_if_nonempty` so a label disappears along with an empty distance:
+
+```ini
+reply_prefix = "{path_distance|prefix_if_nonempty:📏 }\n"
+```
 
 **`minimum_path_bytes`** (integer `0`–`3`, default `0`)
 
