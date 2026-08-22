@@ -3987,6 +3987,11 @@ class BotDataViewer:
                 self.logger.exception("Failed to queue config reload")
                 return False
 
+        # The duplicate check and the write have to be one critical section, or two
+        # concurrent creates for the same schedule both pass the check and the second
+        # silently replaces the first instead of getting the promised 409.
+        schedule_write_lock = threading.Lock()
+
         def _existing_schedules():
             return {e['schedule'] for e in read_entries(self.config_path, _schedule_tz())}
 
@@ -4022,6 +4027,10 @@ class BotDataViewer:
 
         def _save_scheduled_message(data, *, replacing=None):
             """Shared create/update: validate, write config.ini, queue a reload."""
+            with schedule_write_lock:
+                return _save_scheduled_message_locked(data, replacing=replacing)
+
+        def _save_scheduled_message_locked(data, *, replacing=None):
             schedule = (data.get('schedule') or '').strip()
             channel = (data.get('channel') or '').strip()
             message = (data.get('message') or '').strip()
@@ -4120,16 +4129,22 @@ class BotDataViewer:
                 schedule = (data.get('schedule') or '').strip()
                 if not schedule:
                     return jsonify({'success': False, 'error': 'schedule is required'}), 400
-                if schedule not in _existing_schedules():
-                    return jsonify({'success': False, 'error': f"No scheduled message for '{schedule}'"}), 404
-                try:
-                    update_ini_values(self.config_path, {}, {SCHEDULED_MESSAGES_SECTION: [schedule]})
-                except OSError as exc:
-                    self.logger.error("Failed to delete scheduled message: %s", exc)
-                    return jsonify({
-                        'success': False,
-                        'error': 'Could not write config.ini — check file permissions',
-                    }), 500
+                with schedule_write_lock:
+                    if schedule not in _existing_schedules():
+                        return jsonify({
+                            'success': False,
+                            'error': f"No scheduled message for '{schedule}'",
+                        }), 404
+                    try:
+                        update_ini_values(
+                            self.config_path, {}, {SCHEDULED_MESSAGES_SECTION: [schedule]}
+                        )
+                    except OSError as exc:
+                        self.logger.error("Failed to delete scheduled message: %s", exc)
+                        return jsonify({
+                            'success': False,
+                            'error': 'Could not write config.ini — check file permissions',
+                        }), 500
                 reloaded = _queue_config_reload()
                 self.logger.info("Scheduled message deleted: %r", schedule)
                 return jsonify({

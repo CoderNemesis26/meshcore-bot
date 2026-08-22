@@ -2398,8 +2398,11 @@ class MessageHandler:
             # Allowlist enforcement: when flood_scopes is configured, only reply to
             # messages whose scope matched an entry.  Unscoped FLOOD is allowed only
             # when '*' (or equivalent) is explicitly listed.
-            if scope_keys and reply_scope is None:
-                allow_global = getattr(cmd_mgr, "flood_scope_allow_global", False)
+            allow_global = getattr(cmd_mgr, "flood_scope_allow_global", False)
+            # A '*'-only flood_scopes leaves scope_keys empty but still means an
+            # allowlist is configured (global only). Gating on scope_keys alone let
+            # that configuration skip authorisation entirely.
+            if (scope_keys or allow_global) and reply_scope is None:
                 if (
                     scope_rf_data
                     and scope_rf_is_correlated
