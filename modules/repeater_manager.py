@@ -111,10 +111,19 @@ class RepeaterManager:
     # consecutive failures, so one unremovable contact cannot generate warnings forever.
     MAX_STALE_REMOVAL_ATTEMPTS = 3
 
-    # last_seen values at or before this are not real observations (a zero/unset
-    # timestamp parses as 1970). They would otherwise sort to the top of the
-    # staleness list and consume the whole removal budget every sweep.
-    MIN_PLAUSIBLE_LAST_SEEN = datetime(2020, 1, 1)
+    # MeshCore firmware seeds an unset clock with a hardcoded time, so a device that
+    # has never been synced advertises one of these rather than a real observation:
+    #   1715770351 — 15 May 2024, VolatileRTCClock's base_time (helpers/ArduinoHelpers.h)
+    #   1772323200 — 1 Mar 2026, RTC_TIME_MIN used by the NRF52 and ESP32 RTC paths
+    # These are not staleness. Treating them as such made unsynced-but-active contacts
+    # look like the oldest entries in the list: they sorted to the top, consumed the
+    # whole per-sweep removal budget, and the bot kept trying to evict live nodes
+    # (see issue #176, where every affected contact reported exactly 722 days).
+    FIRMWARE_CLOCK_SEEDS = (1715770351, 1772323200)
+
+    # Nothing below the earliest seed can be a real observation either; a raw 0 for a
+    # contact that was never heard decodes to 1970.
+    FIRMWARE_CLOCK_FLOOR = 1715770351
 
     def __init__(self, bot):
         self.bot = bot
@@ -2696,6 +2705,21 @@ class RepeaterManager:
             self.logger.error(f"Error getting contact list status: {e}")
             return {}
 
+    @classmethod
+    def _is_unset_device_clock(cls, last_seen_dt: datetime) -> bool:
+        """True when a last_seen came from a device whose clock was never set.
+
+        Matches the firmware's hardcoded seeds exactly, plus anything at or below the
+        earliest of them (which also covers a raw 0 decoding to 1970). A device that
+        has been running unsynced for a while reports seed + uptime and is not
+        detectable this way; those still look stale, but they are at least removable.
+        """
+        if last_seen_dt <= datetime.fromtimestamp(cls.FIRMWARE_CLOCK_FLOOR):
+            return True
+        return any(
+            last_seen_dt == datetime.fromtimestamp(seed) for seed in cls.FIRMWARE_CLOCK_SEEDS
+        )
+
     async def _get_stale_contacts(self, days_without_advert: int = 7) -> list[dict]:
         """Get contacts that haven't sent adverts in specified days"""
         try:
@@ -2727,13 +2751,13 @@ class RepeaterManager:
 
                         now = datetime.now()
 
-                        # A zero/unset timestamp parses as 1970 and would otherwise sort
-                        # to the top of the list, spending the whole removal budget on
-                        # contacts whose staleness is not actually known. Same for a
-                        # timestamp in the future, which cannot be a past observation.
-                        if last_seen_dt < self.MIN_PLAUSIBLE_LAST_SEEN or last_seen_dt > now:
+                        # An unset device clock reports a firmware seed, which says
+                        # nothing about when the contact was last heard. A future
+                        # timestamp cannot be a past observation either.
+                        if self._is_unset_device_clock(last_seen_dt) or last_seen_dt > now:
                             self.logger.debug(
-                                "Ignoring implausible last_seen %r for contact %s",
+                                "Ignoring unset/implausible last_seen %r for contact %s "
+                                "(device clock not set)",
                                 last_seen,
                                 sanitize_name(contact_data.get('name', 'Unknown')),
                             )

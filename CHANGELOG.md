@@ -26,9 +26,15 @@ semantic versioning.
   that only a restart cleared. A contact is now dropped from cleanup after
   3 consecutive refusals, with one summary warning explaining that the list may stay
   near its limit. A successful removal clears the count.
-- Contacts whose `last_seen` is unset (parsing as 1970) or in the future are no longer
-  treated as stale. They sorted to the top of the staleness list and consumed the whole
-  per-sweep removal budget, crowding out contacts that could actually be removed.
+- Contacts whose device clock was never set are no longer treated as stale. MeshCore
+  seeds an unset clock with a hardcoded time — `1715770351` (15 May 2024) or
+  `1772323200` (1 Mar 2026) — so a never-synced node advertises that seed rather than
+  a real observation. The bot read it as extreme staleness, which put unsynced but
+  perfectly active contacts at the top of the removal list, consuming the whole
+  per-sweep budget and repeatedly trying to evict live nodes. This is what the
+  `722 days ago` entries in #176 were: the 15 May 2024 seed, not contacts last heard
+  in 2024. A raw `0` (decoding to 1970) is covered too, and genuine adverts near a
+  seed are unaffected.
 
 ### Added
 

@@ -1767,8 +1767,9 @@ class TestStaleContactRemovalStorm:
 
 
 class TestStaleContactTimestampSanity:
-    """Unset timestamps parse as 1970 and sorted to the top, spending the whole
-    removal budget on contacts whose real staleness is unknown."""
+    """MeshCore seeds an unset clock with a hardcoded time, so a never-synced device
+    advertises that seed rather than a real observation. Treating it as staleness put
+    unsynced-but-active contacts at the top of the removal list."""
 
     @staticmethod
     def _manager(contacts):
@@ -1785,13 +1786,36 @@ class TestStaleContactTimestampSanity:
         mgr = self._manager({'a': {'name': 'clock-skew', 'public_key': 'K', 'last_seen': future}})
         assert await mgr._get_stale_contacts() == []
 
+    @pytest.mark.parametrize("seed", RepeaterManager.FIRMWARE_CLOCK_SEEDS)
     @pytest.mark.asyncio
-    async def test_genuinely_old_contact_is_still_selected(self):
-        """722 days ago is a real observation, not a bad timestamp."""
-        mgr = self._manager({'a': TestStaleContactRemovalStorm._contact('old', 'K', 722)})
+    async def test_firmware_clock_seed_is_ignored(self, seed):
+        """1715770351 (15 May 2024) and 1772323200 (1 Mar 2026) are unset-clock seeds."""
+        mgr = self._manager({'a': {'name': 'never-synced', 'public_key': 'K', 'last_seen': seed}})
+        assert await mgr._get_stale_contacts() == []
+
+    @pytest.mark.asyncio
+    async def test_the_reported_722_day_contacts_are_ignored(self):
+        """Issue #176: every affected contact reported exactly 722 days, which is the
+        15 May 2024 firmware seed measured from the date in the report. They were
+        unsynced clocks, not contacts genuinely last heard in 2024."""
+        mgr = self._manager(
+            {'a': {'name': 'variable', 'public_key': 'K', 'last_seen': 1715770351}}
+        )
+        assert await mgr._get_stale_contacts() == []
+
+    @pytest.mark.asyncio
+    async def test_a_real_observation_near_a_seed_is_still_selected(self):
+        """Only the seed itself is a sentinel; a real advert a day later is not."""
+        just_after = 1715770351 + 86400
+        mgr = self._manager({'a': {'name': 'early', 'public_key': 'K', 'last_seen': just_after}})
         stale = await mgr._get_stale_contacts()
         assert len(stale) == 1
-        assert stale[0]['days_stale'] == 722
+
+    @pytest.mark.asyncio
+    async def test_recent_contact_is_not_stale(self):
+        """Control: the filter is not simply rejecting everything."""
+        mgr = self._manager({'a': TestStaleContactRemovalStorm._contact('recent', 'K', 30)})
+        assert len(await mgr._get_stale_contacts()) == 1
 
     @pytest.mark.asyncio
     async def test_junk_timestamps_no_longer_crowd_out_real_candidates(self):
