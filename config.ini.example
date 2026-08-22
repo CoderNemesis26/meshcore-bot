@@ -675,9 +675,19 @@ airnow_api_key =
 # Paid tier (14 EUR/year): 3-6 day forecast, 15-30 minute resolution
 forecast_solar_api_key = 
 
-# Repeater prefix API URL for prefix command
-# Leave empty to disable prefix command functionality
-# Configure your own regional API endpoint
+# Optional external repeater-prefix API for the prefix command.
+#
+# LEAVE THIS EMPTY unless you run your own endpoint. Empty does NOT disable the
+# prefix command: the bot answers from its own database of heard repeaters, which
+# is the normal setup. The API only augments that with node counts from a wider
+# regional dataset; location details still come from the local database.
+#
+# This dates from when the project fetched repeater data from map.w0z.is, which is
+# defunct. There is no drop-in public replacement. To serve your own, return JSON:
+#   {"data": [{"prefix": "AB", "node_count": 3, "node_names": ["Node One", ...]}, ...]}
+# Fetched with a plain GET, must answer HTTP 200 with that JSON, 10s timeout.
+# "prefix" is upper-cased by the bot; "node_count" is an int; "node_names" a list.
+# Responses are cached for repeater_prefix_cache_hours below.
 repeater_prefix_api_url = 
 
 # Repeater prefix cache duration in hours

@@ -8,6 +8,10 @@ semantic versioning.
 
 ### Fixed
 
+- Corrected the `[External_Data] repeater_prefix_api_url` comment, which claimed that
+  leaving it empty "disables prefix command functionality" (#70). Empty is the normal
+  setup: the prefix command answers from the bot's own database. The option only adds
+  an optional external dataset, and its JSON contract is now documented.
 - `message_stats.path` no longer reports another packet's route (#80). When RF
   correlation failed, `find_recent_rf_data` fell back to the most recent packet in the
   cache, and the caller attributed that packet's route to the message — which is how a
@@ -52,6 +56,10 @@ semantic versioning.
 
 ### Added
 
+- Documented installing with `pipx`, which sidesteps PEP 668 on Debian 12+, Ubuntu
+  23.04+, Fedora and Arch (#222), including where `config.ini`, the database and
+  `local/` live — everything resolves relative to the config file's directory, so an
+  absolute `--config` is what makes a pipx install deterministic.
 - Migration 23: nullable `snr` / `rssi` columns on `observed_paths` for
   zero-hop advert rows.
 - `{cmd:<command> [args]}` placeholders in `[Scheduled_Messages]`: a scheduled message

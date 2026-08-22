@@ -780,6 +780,27 @@ prefix free
 - Last seen time
 - Location (if available)
 
+**Data source:** By default the bot answers from its own database of repeaters it has
+heard. No external service is required, and `[External_Data] repeater_prefix_api_url`
+should be left **empty** — leaving it empty does not disable the command.
+
+Setting that option adds an optional external dataset on top: node counts come from the
+API while names and locations still come from the local database. The setting dates from
+when the project fetched data from `map.w0z.is`, which is defunct, and there is no
+drop-in public replacement. To serve your own, answer a plain `GET` with HTTP 200 and:
+
+```json
+{
+  "data": [
+    {"prefix": "AB", "node_count": 3, "node_names": ["Node One", "Node Two", "Node Three"]}
+  ]
+}
+```
+
+`prefix` is upper-cased by the bot, `node_count` is an integer, and `node_names` is a
+list of strings. The request times out after 10 seconds, and responses are cached for
+`repeater_prefix_cache_hours` (default 1).
+
 ---
 
 ### `stats`
