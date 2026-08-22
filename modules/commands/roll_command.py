@@ -19,6 +19,8 @@ class RollCommand(BaseCommand):
     """
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "roll"
     keywords = ['roll']
     description = "Roll a random number between 1 and X (default 100). Use 'roll' for 1-100, 'roll 50' for 1-50, etc."

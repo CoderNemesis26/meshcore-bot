@@ -17,6 +17,8 @@ class JokeCommand(BaseCommand):
     """Handles joke commands with category support"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "joke"
     keywords = ['joke', 'jokes']
     description = "Get a random joke or joke from specific category (usage: joke [category])"

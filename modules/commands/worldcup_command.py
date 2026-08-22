@@ -35,6 +35,8 @@ class WorldCupCommand(BaseCommand):
     """Season-gated FIFA World Cup scores, standings, and nation lookups."""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "worldcup"
     keywords = ["wc", "worldcup"]
     description = "FIFA World Cup scores, standings, and nation results (in-season only)"

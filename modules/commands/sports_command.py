@@ -37,6 +37,8 @@ class SportsCommand(BaseCommand):
     """Handles sports commands with ESPN API integration"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "sports"
     keywords = ['sports', 'score', 'scores']
     description = "Get sports scores and schedules (usage: sports [team/league])"

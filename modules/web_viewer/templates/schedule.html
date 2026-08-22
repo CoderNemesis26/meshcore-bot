@@ -309,12 +309,16 @@
         const btn = $('saveScheduleBtn');
         btn.disabled = true;
         try {
-            await api('/api/scheduled-messages', {
+            const result = await api('/api/scheduled-messages', {
                 method: editing ? 'PUT' : 'POST',
                 body: JSON.stringify(payload)
             });
             modal.hide();
-            showStatus('Saved. The bot reloads its schedule within a few seconds.', 'success');
+            // reload_queued false means the file changed but the running bot did not.
+            showStatus(
+                result.message || 'Saved.',
+                result.reload_queued === false ? 'warning' : 'success'
+            );
             load();
         } catch (err) {
             showStatus(err.message, 'danger');
@@ -327,11 +331,14 @@
         if (!confirm('Delete this scheduled message?\n\n'
             + entry.schedule + '\n' + entry.channel + ': ' + entry.message)) return;
         try {
-            await api('/api/scheduled-messages', {
+            const result = await api('/api/scheduled-messages', {
                 method: 'DELETE',
                 body: JSON.stringify({ schedule: entry.schedule })
             });
-            showStatus('Deleted.', 'success');
+            showStatus(
+                result.message || 'Deleted.',
+                result.reload_queued === false ? 'warning' : 'success'
+            );
             load();
         } catch (err) {
             showStatus(err.message, 'danger');

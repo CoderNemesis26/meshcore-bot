@@ -48,6 +48,15 @@ class BaseCommand(ABC):
     requires_dm: bool = False
     requires_internet: bool = False  # Set to True if command needs internet access
     cooldown_seconds: int = 0
+
+    # Whether this command may be run by CommandManager.render_command_output for a
+    # {cmd:...} placeholder in a scheduled message. Opt-in, because rendering is only
+    # airtime-free for commands whose entire output goes through send_response /
+    # send_response_chunked. A command that transmits directly (advert), posts its own
+    # messages (announcements), changes device or bot state, or is restricted to DMs
+    # (schedule leaks configuration if broadcast) must stay False. A denylist cannot be
+    # safe here: a new command defaults to not renderable rather than to transmitting.
+    render_safe: bool = False
     category: str = "general"
 
     # Documentation fields - to be overridden by subclasses for website generation

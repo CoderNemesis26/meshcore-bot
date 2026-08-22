@@ -78,3 +78,70 @@ class TestPathCommandDistance:
     def test_placeholder_is_empty_string_when_unmeasurable(self, path_command):
         path_command._last_path_distance_km = None
         assert path_command._format_path_distance() == ""
+
+
+@pytest.mark.unit
+class TestDistanceThroughTheRealLookup:
+    """Regression for a gap the unit tests above could not see.
+
+    Those pass hand-built repeater_info dicts straight to the calculator. The
+    resolution code that actually *builds* repeater_info was dropping latitude and
+    longitude, so {path_distance} was always blank in production while the tests
+    stayed green. These feed raw DB-shaped rows through _lookup_repeater_names via
+    its lookup_func hook, so the real construction code runs.
+    """
+
+    @pytest.fixture
+    def path_command(self, mock_bot):
+        from modules.commands.path_command import PathCommand
+
+        cmd = PathCommand(mock_bot)
+        cmd.bot_latitude = 47.0
+        cmd.bot_longitude = -122.0
+        cmd._get_sender_location = lambda: (47.0, -122.5)
+        return cmd
+
+    @staticmethod
+    def _row(node_id, lat, lon):
+        """A row shaped like the repeater query's output."""
+        return {
+            'name': f'Hop {node_id}',
+            'public_key': node_id.lower() * 32,
+            'device_type': 'Repeater',
+            'last_seen': '2026-08-21 12:00:00',
+            'last_heard': '2026-08-21 12:00:00',
+            'last_advert_timestamp': None,
+            'is_active': True,
+            'latitude': lat,
+            'longitude': lon,
+            'city': 'Seattle',
+            'state': 'WA',
+            'country': 'US',
+            'snr': 5.0,
+            'is_starred': False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_coordinates_survive_the_real_repeater_info_builder(self, path_command):
+        info = await path_command._lookup_repeater_names(
+            ['AA'], lookup_func=lambda node_id: [self._row(node_id, 47.0, -122.3)]
+        )
+        assert info['AA']['found'] is True
+        # The bug: these were dropped when repeater_info was constructed.
+        assert info['AA']['latitude'] == 47.0
+        assert info['AA']['longitude'] == -122.3
+
+    @pytest.mark.asyncio
+    async def test_distance_is_computed_end_to_end(self, path_command):
+        info = await path_command._lookup_repeater_names(
+            ['AA'], lookup_func=lambda node_id: [self._row(node_id, 47.0, -122.3)]
+        )
+        km = path_command._calculate_path_distance_km(['AA'], info)
+        assert km is not None and km > 0
+
+    @pytest.mark.asyncio
+    async def test_row_without_coordinates_still_yields_no_distance(self, path_command):
+        info = await path_command._lookup_repeater_names(
+            ['AA'], lookup_func=lambda node_id: [self._row(node_id, None, None)]
+        )
+        assert path_command._calculate_path_distance_km(['AA'], info) is None

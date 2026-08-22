@@ -52,6 +52,8 @@ class AirplanesCommand(BaseCommand):
     """
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "airplanes"
     keywords = ['airplanes', 'aircraft', 'planes', 'adsb', 'overhead']
     description = "Get aircraft overhead (usage: airplanes [location] [options] or overhead [lat,lon])"

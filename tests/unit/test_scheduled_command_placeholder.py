@@ -105,13 +105,6 @@ class TestRenderCommandOutput:
         assert await mgr.render_command_output("admin reboot") is None
 
     @pytest.mark.asyncio
-    async def test_non_renderable_command_is_refused(self, mock_bot):
-        """announcements transmits directly, so rendering it would broadcast for real."""
-        ann = _make_command(name="announcements", keywords=["announce"], reply="hi")
-        mgr = _make_manager(mock_bot, {"announcements": ann})
-        assert await mgr.render_command_output("announce hi") is None
-
-    @pytest.mark.asyncio
     async def test_timeout_returns_none(self, mock_bot):
         slow = _make_command(name="slow", keywords=["slow"], reply="late", delay=0.5)
         mgr = _make_manager(mock_bot, {"slow": slow})
@@ -246,19 +239,20 @@ class TestRenderWithRealCommand:
     """End-to-end through a real command's plumbing, not a mocked execute()."""
 
     @pytest.mark.asyncio
-    async def test_real_ping_command_renders_without_transmitting(self, command_mock_bot):
+    async def test_real_dice_command_renders_without_transmitting(self, command_mock_bot):
+        """dice is a real render_safe command with no network dependency."""
         from modules.command_manager import CommandManager
-        from modules.commands.ping_command import PingCommand
+        from modules.commands.dice_command import DiceCommand
 
-        command_mock_bot.config.add_section("Ping_Command")
-        command_mock_bot.config.set("Ping_Command", "enabled", "true")
+        command_mock_bot.config.add_section("Dice_Command")
+        command_mock_bot.config.set("Dice_Command", "enabled", "true")
 
-        ping = PingCommand(command_mock_bot)
+        ping = DiceCommand(command_mock_bot)
 
         mgr = object.__new__(CommandManager)
         mgr.bot = command_mock_bot
         mgr.logger = MagicMock()
-        mgr.commands = {"ping": ping}
+        mgr.commands = {"dice": ping}
         mgr._last_response = None
         mgr.send_dm = AsyncMock()
         mgr.send_channel_message = AsyncMock()
@@ -267,9 +261,9 @@ class TestRenderWithRealCommand:
             lambda message, content, **kw: CommandManager.send_response(mgr, message, content, **kw)
         )
 
-        rendered = await mgr.render_command_output("ping", channel="#general")
+        rendered = await mgr.render_command_output("dice", channel="#general")
 
-        assert rendered, "a real ping should produce text"
+        assert rendered, "a real dice roll should produce text"
         mgr.send_dm.assert_not_called()
         mgr.send_channel_message.assert_not_called()
 
@@ -415,3 +409,124 @@ class TestFloorEnforcedDuringSetup:
         """The floor applies to command placeholders, not to plain scheduled text."""
         _, apsched = self._run_setup({"*/5 * * * *": "Public:static message"})
         assert apsched.add_job.call_count == 1
+
+
+@pytest.mark.unit
+class TestRenderSafetyIsOptIn:
+    """Capture only intercepts send_response and send_response_chunked, so anything
+    that transmits by other means must never be rendered. Opt-in, not a denylist."""
+
+    @pytest.mark.asyncio
+    async def test_command_not_marked_render_safe_is_refused(self, mock_bot):
+        cmd = _make_command(name="advert", keywords=["advert"], reply="sent")
+        cmd.render_safe = False
+        mgr = _make_manager(mock_bot, {"advert": cmd})
+        assert await mgr.render_command_output("advert") is None
+
+    @pytest.mark.asyncio
+    async def test_command_marked_render_safe_is_allowed(self, mock_bot):
+        cmd = _make_command(name="wx", keywords=["wx"], reply="12C")
+        cmd.render_safe = True
+        mgr = _make_manager(mock_bot, {"wx": cmd})
+        assert await mgr.render_command_output("wx") == "12C"
+
+    @pytest.mark.asyncio
+    async def test_a_command_missing_the_attribute_defaults_to_refused(self, mock_bot):
+        """A new command must not become renderable by omission."""
+        cmd = _make_command(name="brandnew", keywords=["brandnew"], reply="hi")
+        del cmd.render_safe
+        cmd.mock_add_spec(['name', 'keywords', '_derive_config_section_name',
+                           'get_config_value', 'requires_admin_access',
+                           'check_cooldown', 'record_execution', 'execute'])
+        mgr = _make_manager(mock_bot, {"brandnew": cmd})
+        assert await mgr.render_command_output("brandnew") is None
+
+    def test_transmitting_commands_are_not_marked_render_safe(self):
+        """Guards the allowlist itself against a careless future edit."""
+        from modules.commands.advert_command import AdvertCommand
+        from modules.commands.announcements_command import AnnouncementsCommand
+        from modules.commands.schedule_command import ScheduleCommand
+
+        for cls in (AdvertCommand, AnnouncementsCommand, ScheduleCommand):
+            assert getattr(cls, 'render_safe', False) is False, cls.__name__
+
+    def test_base_command_defaults_to_not_render_safe(self):
+        from modules.commands.base_command import BaseCommand
+
+        assert BaseCommand.render_safe is False
+
+
+@pytest.mark.unit
+class TestChunkedResponsesAreCaptured:
+    @pytest.mark.asyncio
+    async def test_chunked_send_captures_instead_of_transmitting(self, mock_bot):
+        from modules.command_manager import CommandManager
+
+        mgr = object.__new__(CommandManager)
+        mgr.bot = mock_bot
+        mgr.logger = MagicMock()
+        mgr.send_dm = AsyncMock()
+        mgr.send_channel_messages_chunked = AsyncMock()
+
+        sink = []
+        msg = MeshMessage(content="x", channel="#general", is_dm=False, capture_sink=sink)
+        ok = await CommandManager.send_response_chunked(mgr, msg, ["one", "two"])
+
+        assert ok is True
+        assert sink == ["one", "two"]
+        mgr.send_channel_messages_chunked.assert_not_called()
+        mgr.send_dm.assert_not_called()
+
+
+@pytest.mark.unit
+class TestScheduledSendFitsTheRfBudget:
+    """A {cmd:...} expansion can exceed one message; send_channel_message does not
+    split, so an oversized scheduled message would fail at the device."""
+
+    @staticmethod
+    def _sched(bot_name="Bot"):
+        import configparser
+
+        from modules.scheduler import MessageScheduler
+
+        cfg = configparser.ConfigParser()
+        cfg["Bot"] = {"bot_name": bot_name}
+        sched = object.__new__(MessageScheduler)
+        sched.bot = MagicMock()
+        sched.bot.config = cfg
+        sched.bot.meshcore = None
+        sched.logger = MagicMock()
+        return sched
+
+    def test_budget_accounts_for_the_username_prefix(self):
+        sched = self._sched(bot_name="LongBotName")
+        assert sched._channel_body_budget(None) == 160 - len("LongBotName") - 2
+
+    def test_scoped_sends_get_a_smaller_budget(self):
+        sched = self._sched()
+        assert sched._channel_body_budget("#sea") < sched._channel_body_budget(None)
+
+    def test_short_text_is_a_single_chunk(self):
+        sched = self._sched()
+        assert sched._split_to_budget("hello", 100) == ["hello"]
+
+    def test_splits_on_line_boundaries(self):
+        sched = self._sched()
+        text = "\n".join(["line one", "line two", "line three"])
+        chunks = sched._split_to_budget(text, 20)
+        assert len(chunks) > 1
+        assert all(len(c.encode("utf-8")) <= 20 for c in chunks)
+
+    def test_every_chunk_respects_the_budget(self):
+        sched = self._sched()
+        chunks = sched._split_to_budget("x" * 500, 60)
+        assert all(len(c.encode("utf-8")) <= 60 for c in chunks)
+        assert "".join(chunks) == "x" * 500
+
+    def test_multibyte_characters_are_not_split_mid_character(self):
+        """Budget is in bytes; a 3-byte character must not be cut in half."""
+        sched = self._sched()
+        text = "☃" * 40  # 3 bytes each
+        chunks = sched._split_to_budget(text, 20)
+        assert all(len(c.encode("utf-8")) <= 20 for c in chunks)
+        assert "".join(chunks) == text  # nothing lost or corrupted

@@ -2926,7 +2926,19 @@ class RepeaterManager:
                     await asyncio.sleep(1)
 
                 except Exception as e:
-                    self.logger.error(f"Error removing stale contact {sanitize_name(contact.get('name', 'Unknown'))}: {e}")
+                    # Timeouts and command exceptions are failures too. Without counting
+                    # them the contact stays eligible forever and the retry storm this
+                    # guard exists to stop can come back through the exception path.
+                    public_key = contact.get('public_key', '')
+                    if public_key:
+                        attempts = self._stale_removal_failures.get(public_key, 0) + 1
+                        self._stale_removal_failures[public_key] = attempts
+                        if attempts >= self.MAX_STALE_REMOVAL_ATTEMPTS:
+                            given_up += 1
+                    self.logger.error(
+                        f"Error removing stale contact "
+                        f"{sanitize_name(contact.get('name', 'Unknown'))}: {e}"
+                    )
                     continue
 
             if given_up:

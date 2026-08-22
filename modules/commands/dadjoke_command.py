@@ -19,6 +19,8 @@ class DadJokeCommand(BaseCommand):
     """Handles dad joke commands using icanhazdadjoke.com API"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "dadjoke"
     keywords = ['dadjoke', 'dad joke', 'dadjokes', 'dad jokes']
     description = "Get a random dad joke from icanhazdadjoke.com"

@@ -59,6 +59,8 @@ class WxCommand(BaseCommand):
     """Handles weather commands with zipcode support"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "wx"
     keywords = ['wx', 'weather', 'wxa', 'wxalert']
     description = "Get weather information for a zip code (usage: wx 12345)"

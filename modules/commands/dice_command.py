@@ -14,6 +14,8 @@ class DiceCommand(BaseCommand):
     """Handles dice rolling commands"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "dice"
     keywords = ['dice']
     description = "Roll dice for D&D and tabletop games. Use 'dice' for d6, 'dice d20' for d20, 'dice 2d6' for 2d6, 'dice d10 d6' for mixed dice, 'dice decade' for decade die (00-90), etc."

@@ -23,6 +23,8 @@ class PrefixCommand(BaseCommand):
     """Handles repeater prefix lookups (1-, 2-, or 3-byte hex; longer input truncated to 3 bytes)."""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "prefix"
     keywords = ['prefix', 'repeater', 'lookup']
     description = "Look up repeaters by prefix (2, 4, or 6 hex chars = 1–3 bytes; longer input truncated)"

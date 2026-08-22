@@ -15,6 +15,8 @@ class HackerCommand(BaseCommand):
     """Handles hacker-style responses to Linux commands"""
 
     # Plugin metadata
+    # Read-only informational output; safe for scheduled {cmd:...} rendering.
+    render_safe = True
     name = "hacker"
     keywords = ['sudo', 'ps aux', 'grep', 'ls -l', 'ls -la', 'echo $PATH', 'rm', 'rm -rf',
                 'cat', 'whoami', 'top', 'htop', 'netstat', 'ss', 'kill', 'killall', 'chmod',

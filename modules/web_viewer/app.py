@@ -4004,11 +4004,17 @@ class BotDataViewer:
             """Validate a schedule and return its next run times (powers the builder)."""
             try:
                 data = request.get_json(silent=True) or {}
+                try:
+                    count = int(data.get('count', 5))
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'count must be an integer'}), 400
+                if not 1 <= count <= 20:
+                    return jsonify({'error': 'count must be between 1 and 20'}), 400
                 return jsonify(describe_schedule(
                     data.get('schedule', ''),
                     _schedule_tz(),
                     message=data.get('message', ''),
-                    count=int(data.get('count', 5)),
+                    count=count,
                 ))
             except Exception as e:
                 self.logger.error(f"Error previewing schedule: {e}")
@@ -4058,6 +4064,12 @@ class BotDataViewer:
                 }), 500
 
             reloaded = _queue_config_reload()
+            if not reloaded:
+                # Written to disk but the running bot still has the old jobs. Saying
+                # "saved" alone would imply it is live.
+                self.logger.warning(
+                    "Scheduled message written but the config reload could not be queued"
+                )
             self.logger.info(
                 "Scheduled message saved: %r -> %s:%s (backup=%s)",
                 schedule, channel, message[:40],
@@ -4066,6 +4078,12 @@ class BotDataViewer:
             return jsonify({
                 'success': True,
                 'reload_queued': reloaded,
+                'message': (
+                    'Saved. The bot reloads its schedule within a few seconds.'
+                    if reloaded else
+                    'Saved to config.ini, but the bot could not be told to reload. '
+                    'It will pick the change up on next restart.'
+                ),
                 'entry': {'schedule': schedule, 'channel': channel,
                           'scope': scope, 'message': message, **described},
             })
@@ -4114,7 +4132,15 @@ class BotDataViewer:
                     }), 500
                 reloaded = _queue_config_reload()
                 self.logger.info("Scheduled message deleted: %r", schedule)
-                return jsonify({'success': True, 'reload_queued': reloaded})
+                return jsonify({
+                    'success': True,
+                    'reload_queued': reloaded,
+                    'message': (
+                        'Deleted.' if reloaded else
+                        'Deleted from config.ini, but the bot could not be told to '
+                        'reload. It will stop sending after the next restart.'
+                    ),
+                })
             except Exception as e:
                 self.logger.error(f"Error deleting scheduled message: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500

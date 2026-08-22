@@ -405,10 +405,18 @@ class MessageHandler:
                     if decoded_packet:
                         self.logger.debug(f"Decoded packet for routing from RF data: {decoded_packet}")
 
-                        # Extract routing information
+                        # Extract routing information, but only from a packet actually
+                        # correlated to this DM. Without this the path_info built below
+                        # comes from whatever packet was heard most recently (#80); the
+                        # later provenance check only declines to *overwrite* it.
                         if recent_rf_data.get("routing_info"):
-                            routing_info = recent_rf_data["routing_info"]
-                            self.logger.debug(f"Found routing info: {routing_info}")
+                            if rf_data_is_correlated(recent_rf_data):
+                                routing_info = recent_rf_data["routing_info"]
+                                self.logger.debug(f"Found routing info: {routing_info}")
+                            else:
+                                self.logger.debug(
+                                    "Ignoring routing info from an uncorrelated fallback packet"
+                                )
 
                 # If we have routing info, use it for path information
                 if routing_info:
@@ -2250,13 +2258,18 @@ class MessageHandler:
                 # ended up recorded as a single direct hop (#80) — and it would write a
                 # fabricated edge into the mesh graph. Leave the route unknown instead.
                 route_is_attributable = rf_data_is_correlated(recent_rf_data)
+
                 if not route_is_attributable:
+                    # Terminal on purpose. Falling through would reach the raw-hex and
+                    # routing_info fallbacks below, which would take the route from the
+                    # unrelated packet — the exact bug this guards against (#80).
                     self.logger.debug(
                         "RF data for this channel message is an uncorrelated fallback; "
                         "not attributing its route (hops/path left unresolved)"
                     )
-
-                if route_is_attributable and packet_info and packet_info.get("path_len") is not None:
+                    hops = payload.get("path_len", 255)
+                    path_string = None
+                elif packet_info and packet_info.get("path_len") is not None:
                     hops = packet_info.get("path_len", 0)
                     if packet_info.get("payload_type") == 9:  # TRACE packet
                         path_info = packet_info.get("path_info", {})
@@ -2375,7 +2388,14 @@ class MessageHandler:
                 is_dm=False,
                 reply_scope=reply_scope,
             )
-            if recent_rf_data and recent_rf_data.get("routing_info"):
+            # Only a correlated packet's routing_info belongs to this message. The path
+            # command reads message.routing_info directly, so an uncorrelated fallback
+            # here would show a different packet's route to the user (#80).
+            if (
+                recent_rf_data
+                and recent_rf_data.get("routing_info")
+                and rf_data_is_correlated(recent_rf_data)
+            ):
                 message.routing_info = recent_rf_data["routing_info"]
 
             # Path information is now set directly in the MeshMessage constructor from RF data

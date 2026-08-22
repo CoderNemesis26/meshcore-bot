@@ -23,6 +23,7 @@ from apscheduler.triggers.date import DateTrigger
 from meshcore.events import EventType
 
 from .maintenance import MaintenanceRunner
+from .models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD
 from .scheduled_message_cron import (
     is_valid_legacy_hhmm,
     parse_schedule_key,
@@ -592,6 +593,66 @@ class MessageScheduler:
         ]
         return any(placeholder in message for placeholder in placeholders)
 
+    def _channel_body_budget(self, scope: str | None) -> int:
+        """UTF-8 byte budget for one channel message body.
+
+        Mirrors BaseCommand.get_max_message_length: channel sends are framed as
+        "<username>: <body>", and a regional flood scope costs extra header bytes.
+        """
+        username = ""
+        try:
+            self_info = getattr(getattr(self.bot, "meshcore", None), "self_info", None)
+            if isinstance(self_info, dict):
+                username = self_info.get("name") or self_info.get("user_name") or ""
+            elif self_info is not None:
+                username = getattr(self_info, "name", "") or getattr(self_info, "user_name", "")
+        except Exception:  # noqa: BLE001 - budget must never break a send
+            username = ""
+        if not isinstance(username, str) or not username:
+            try:
+                username = self.bot.config.get("Bot", "bot_name", fallback="") or ""
+            except Exception:  # noqa: BLE001 - budget must never break a send
+                username = ""
+        # A stubbed or misconfigured source can hand back a non-string; fall back to
+        # the most conservative budget rather than raising inside the send path.
+        if not isinstance(username, str):
+            username = ""
+
+        budget = 160 - len(username.encode("utf-8")) - 2
+        if scope and scope.strip():
+            budget -= CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD
+        return max(budget, 32)
+
+    @staticmethod
+    def _split_to_budget(text: str, budget: int) -> list[str]:
+        """Split *text* into chunks of at most *budget* UTF-8 bytes, on line breaks
+        where possible so a rendered command's lines are not cut mid-sentence."""
+        if len(text.encode("utf-8")) <= budget:
+            return [text]
+
+        chunks: list[str] = []
+        current = ""
+        for line in text.split("\n"):
+            candidate = f"{current}\n{line}" if current else line
+            if len(candidate.encode("utf-8")) <= budget:
+                current = candidate
+                continue
+            if current:
+                chunks.append(current)
+                current = ""
+            # A single line over budget still has to go out; cut it on a character
+            # boundary that keeps the encoded length within the limit.
+            while len(line.encode("utf-8")) > budget:
+                cut = budget
+                while cut > 0 and len(line[:cut].encode("utf-8")) > budget:
+                    cut -= 1
+                chunks.append(line[:cut])
+                line = line[cut:]
+            current = line
+        if current:
+            chunks.append(current)
+        return [c for c in chunks if c]
+
     async def _send_scheduled_message_async(
         self,
         channel: str,
@@ -639,6 +700,24 @@ class MessageScheduler:
 
         import asyncio as _asyncio
         send_timeout = self.bot.config.getint('Bot', 'send_timeout_seconds', fallback=30)
+
+        # A {cmd:...} placeholder can expand to more than one message's worth of text,
+        # and send_channel_message does not split. Chunk to the RF body budget so a
+        # long rendered reply airs as several messages instead of failing at the device.
+        chunks = self._split_to_budget(message, self._channel_body_budget(scope))
+        if len(chunks) > 1:
+            self.logger.info(
+                "Scheduled message for %s split into %d chunks to fit the RF budget",
+                channel, len(chunks),
+            )
+            await _asyncio.wait_for(
+                self.bot.command_manager.send_channel_messages_chunked(
+                    channel, chunks, skip_user_rate_limit=True, scope=scope
+                ),
+                timeout=send_timeout * len(chunks),
+            )
+            return
+
         await _asyncio.wait_for(
             self.bot.command_manager.send_channel_message(
                 channel, message, skip_user_rate_limit=True, scope=scope

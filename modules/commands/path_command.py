@@ -465,6 +465,10 @@ class PathCommand(BaseCommand):
         # Store the current message for use in _extract_path_from_recent_messages
         self._current_message = message
 
+        # Instance state, so a value left by the previous request would otherwise be
+        # rendered next to this one's reply, including on the error paths below.
+        self._last_path_distance_km = None
+
         # Parse the message content to extract path data
         content = message.content.strip()
         parts = content.split()
@@ -718,7 +722,11 @@ class PathCommand(BaseCommand):
                             'collision': False,
                             'geographic_guess': (selection.method == 'geographic'),
                             'graph_guess': (selection.method == 'graph'),
-                            'confidence': selection.confidence
+                            'confidence': selection.confidence,
+                            # Carried through for {path_distance}; without these the
+                            # distance calculation can never find a coordinate.
+                            'latitude': selected_repeater.get('latitude'),
+                            'longitude': selected_repeater.get('longitude'),
                         }
                     elif selection.status == 'collision':
                         # Low confidence or no selection method - show collision warning
@@ -739,7 +747,9 @@ class PathCommand(BaseCommand):
                             'last_seen': repeater['last_seen'],
                             'is_active': repeater['is_active'],
                             'found': True,
-                            'collision': False
+                            'collision': False,
+                            'latitude': repeater.get('latitude'),
+                            'longitude': repeater.get('longitude'),
                         }
                     else:
                         # All repeaters filtered out (too old) - show as not found
@@ -763,7 +773,9 @@ class PathCommand(BaseCommand):
                                         'device_type': contact_data.get('type', 'Unknown'),
                                         'last_seen': 'Active',
                                         'is_active': True,
-                                        'source': 'device'
+                                        'source': 'device',
+                                        'latitude': contact_data.get('adv_lat'),
+                                        'longitude': contact_data.get('adv_lon'),
                                     })
 
                     if device_matches:
@@ -787,7 +799,9 @@ class PathCommand(BaseCommand):
                                 'is_active': match['is_active'],
                                 'found': True,
                                 'collision': False,
-                                'source': 'device'
+                                'source': 'device',
+                                'latitude': match.get('latitude'),
+                                'longitude': match.get('longitude'),
                             }
                     else:
                         repeater_info[node_id] = {

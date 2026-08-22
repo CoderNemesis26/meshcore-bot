@@ -1814,6 +1814,14 @@ class CommandManager:
         """
         if not chunks:
             return True
+
+        # Render-only invocation: collect the chunks and transmit nothing. Without
+        # this a chunked command would put its output on the air while being
+        # "rendered" for a scheduled message.
+        if getattr(message, 'capture_sink', None) is not None:
+            message.capture_sink.extend(chunk for chunk in chunks if chunk)
+            return True
+
         rate_limit_key = self.get_rate_limit_key(message)
         if message.is_dm:
             rate_limit_seconds = self.bot.config.getfloat('Bot', 'bot_tx_rate_limit_seconds', fallback=1.0)
@@ -1843,10 +1851,6 @@ class CommandManager:
             rate_limit_key=rate_limit_key,
             scope=getattr(message, 'reply_scope', None),
         )
-
-    # Commands that transmit directly instead of going through send_response cannot be
-    # captured, so rendering them would send the real thing as a side effect.
-    NON_RENDERABLE_COMMANDS = frozenset({'announcements', 'announce'})
 
     def resolve_command_by_trigger(self, trigger: str):
         """Find the command a trigger word would invoke, or None.
@@ -1899,10 +1903,15 @@ class CommandManager:
             return None
 
         command_name = getattr(command, 'name', trigger)
-        if command_name in self.NON_RENDERABLE_COMMANDS:
+        # Opt-in, not a denylist. Capture only intercepts send_response and
+        # send_response_chunked, so a command that transmits by other means (advert),
+        # posts its own messages (announcements), or is DM-only (schedule) would spend
+        # airtime or leak configuration if rendered. Anything not explicitly marked
+        # render_safe is refused, so a new command is never renderable by accident.
+        if not getattr(command, 'render_safe', False):
             self.logger.warning(
-                "Scheduled {cmd:...} placeholder: %r sends its own messages and cannot be rendered",
-                command_name,
+                "Scheduled {cmd:...} placeholder: %r is not marked render_safe, so it "
+                "cannot be run for its text alone", command_name,
             )
             return None
 
