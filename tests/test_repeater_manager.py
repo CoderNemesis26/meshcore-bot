@@ -1828,3 +1828,47 @@ class TestStaleContactTimestampSanity:
 
         # Without the guard the twelve 1970 entries sort first and fill max_remove=10.
         assert [c['public_key'] for c in stale] == ['REAL']
+
+
+class TestUnsetClockIsNotGroundsForPurging:
+    """An unset clock ranks a node as the oldest thing on the mesh. Every purge path
+    has to refuse it, or active unsynced nodes get evicted first (#176)."""
+
+    SEED = 1715770351  # 15 May 2024, VolatileRTCClock base_time
+
+    def test_helper_recognises_both_firmware_seeds(self):
+        for seed in RepeaterManager.FIRMWARE_CLOCK_SEEDS:
+            assert RepeaterManager._is_unset_device_clock(datetime.fromtimestamp(seed))
+
+    def test_helper_recognises_raw_zero(self):
+        assert RepeaterManager._is_unset_device_clock(datetime.fromtimestamp(0))
+
+    def test_helper_accepts_a_real_recent_observation(self):
+        assert not RepeaterManager._is_unset_device_clock(datetime.now() - timedelta(days=30))
+
+    def test_helper_accepts_a_real_observation_just_after_a_seed(self):
+        assert not RepeaterManager._is_unset_device_clock(
+            datetime.fromtimestamp(self.SEED + 86400)
+        )
+
+    @pytest.mark.asyncio
+    async def test_repeaters_for_purging_skips_unset_clocks(self):
+        mgr = object.__new__(RepeaterManager)
+        mgr.logger = Mock()
+        mgr._is_repeater_device = lambda c: True
+        mgr.bot = SimpleNamespace(meshcore=SimpleNamespace(contacts={
+            'a': {'public_key': 'A', 'adv_name': 'unsynced', 'type': 2, 'last_advert': self.SEED},
+        }))
+        assert await mgr._get_repeaters_for_purging(5) == []
+
+    @pytest.mark.asyncio
+    async def test_repeaters_for_purging_still_offers_a_real_old_repeater(self):
+        """Control: the guard is not simply rejecting every repeater."""
+        old = (datetime.now() - timedelta(days=40)).timestamp()
+        mgr = object.__new__(RepeaterManager)
+        mgr.logger = Mock()
+        mgr._is_repeater_device = lambda c: True
+        mgr.bot = SimpleNamespace(meshcore=SimpleNamespace(contacts={
+            'a': {'public_key': 'A', 'adv_name': 'genuinely-old', 'type': 2, 'last_advert': old},
+        }))
+        assert len(await mgr._get_repeaters_for_purging(5)) == 1

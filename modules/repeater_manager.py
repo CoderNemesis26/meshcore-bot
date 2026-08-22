@@ -1002,6 +1002,17 @@ class RepeaterManager:
                     else:
                         last_seen_dt = datetime.now() - timedelta(days=30)  # Default to old
 
+                    # An unset device clock reports a firmware seed, which would rank
+                    # this repeater as the oldest thing on the mesh and purge it first
+                    # even if it is active. Staleness is unknown, so it is not grounds
+                    # for removal (see issue #176).
+                    if self._is_unset_device_clock(last_seen_dt):
+                        self.logger.debug(
+                            "Not offering %s for purging: device clock is not set",
+                            sanitize_name(name),
+                        )
+                        continue
+
                     device_repeaters.append({
                         'public_key': public_key,
                         'name': name,
@@ -1154,6 +1165,15 @@ class RepeaterManager:
                                 last_seen_dt = datetime.fromtimestamp(last_seen)
                             else:
                                 last_seen_dt = last_seen
+                            if self._is_unset_device_clock(last_seen_dt):
+                                # Unknown staleness, not extreme staleness. Leaving it
+                                # in would give this companion the most purgeable score
+                                # despite possibly being active (see issue #176).
+                                self.logger.debug(
+                                    "Not offering %s for purging: device clock is not set",
+                                    sanitize_name(name),
+                                )
+                                continue
                             days_inactive = (current_time - last_seen_dt).days
                         except:
                             days_inactive = 999  # Very old if we can't parse
@@ -2520,6 +2540,15 @@ class RepeaterManager:
                                 else:
                                     # Assume it's already a datetime object
                                     last_advert_dt = last_advert
+
+                                # An unset device clock is not evidence of age, and
+                                # purging on it would evict active repeaters (#176).
+                                if self._is_unset_device_clock(last_advert_dt):
+                                    self.logger.debug(
+                                        f"Skipping {name}: device clock is not set "
+                                        f"(last_advert: {last_advert})"
+                                    )
+                                    break
 
                                 # Check if it's older than cutoff
                                 if last_advert_dt < cutoff_date:

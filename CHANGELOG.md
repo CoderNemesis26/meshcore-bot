@@ -35,6 +35,11 @@ semantic versioning.
   `722 days ago` entries in #176 were: the 15 May 2024 seed, not contacts last heard
   in 2024. A raw `0` (decoding to 1970) is covered too, and genuine adverts near a
   seed are unaffected.
+- The same unset-clock check now guards every purge path, not just stale-contact
+  cleanup. `_get_repeaters_for_purging`, `_get_companions_for_purging` and
+  `purge_old_repeaters` all ranked an unset clock as maximum age, so an active node
+  that had never been time-synced was the *first* candidate for eviction. Unknown
+  staleness is no longer grounds for removal.
 
 ### Added
 
