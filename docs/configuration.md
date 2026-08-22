@@ -222,12 +222,19 @@ The trigger is matched against command **names and their keywords**, so `{cmd:we
 
 A placeholder expands to **nothing** (and logs a warning) when the command is unknown, disabled in config, admin-only, times out, or returns no output — the literal `{cmd:...}` is never transmitted. If a message is empty after expansion, nothing is sent at all. Command output is not re-scanned, so a reply that happens to contain `{cmd:...}` cannot recurse.
 
-Two limits worth knowing:
+#### Airtime guards
+
+Every firing is a transmission on a shared medium, and a command placeholder makes it easy to write a cron that airs several times an hour. Two guards apply, and neither is configurable:
+
+- **A 15-minute floor.** A schedule containing `{cmd:...}` may not fire more often than every 15 minutes. An entry that does is **rejected at startup** with an error and is not scheduled at all — it does not silently run at a slower rate. The check measures the *tightest* gap between firings, so `0,1 * * * *` is treated as a 60-second schedule rather than an hourly one. Schedules with no command placeholder are unaffected.
+- **The command's own cooldown still applies.** `[<Name>_Command] cooldown_seconds` is not bypassed by scheduling. If the command is on cooldown when the schedule fires, the placeholder expands to nothing for that round and logs a warning.
+
+Other limits worth knowing:
 
 - Commands that transmit directly instead of returning text (currently only `announcements`) cannot be rendered and are refused, since running them would broadcast for real.
 - `[Bot] scheduled_command_timeout_seconds` (default `30`) bounds each render. Network-backed commands like `wx` need the headroom.
 
-**This costs airtime every time it fires.** A `*/5 * * * *` forecast is 288 transmissions a day; pick an interval the mesh can afford.
+Even within the floor, mind the cost: a `*/15 * * * *` forecast is 96 transmissions a day.
 
 ### Schedule keys (APScheduler cron, not Vixie)
 

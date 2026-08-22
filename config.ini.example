@@ -547,7 +547,14 @@ category.funfact = fun
 # disabled, admin-only, times out, or produces no output — the raw {cmd:...} text is
 # never put on the air. If expansion leaves the message empty, nothing is sent.
 # Command output is not re-scanned, so a reply containing {cmd:...} cannot recurse.
-# Mind the airtime: a scheduled command still costs a transmission every time it fires.
+#
+# Airtime guards (both deliberate, neither configurable):
+#   - A schedule containing {cmd:...} must not fire more often than every 15 minutes.
+#     An entry that does is rejected at startup with an error and is not scheduled.
+#     Measured by the tightest gap, so "0,1 * * * *" counts as every 60 seconds.
+#     Schedules without a command placeholder are unaffected.
+#   - The command's own cooldown still applies. If it is on cooldown when the schedule
+#     fires, the placeholder expands to nothing that round.
 #
 # Available placeholders for mesh network information:
 # 

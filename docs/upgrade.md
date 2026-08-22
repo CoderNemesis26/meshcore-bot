@@ -114,6 +114,9 @@ database migration, copies relative-path databases coherently, rewrites the migr
 configuration, builds a fresh virtual environment, and restarts a service that was
 active before the upgrade.
 
+Add `--install-extras` to install the optional profanity-filter and geocoding
+packages without being prompted, which is what you want for an unattended upgrade.
+
 Before upgrading, keep a separate backup of your configuration and database. The
 installer preserves:
 

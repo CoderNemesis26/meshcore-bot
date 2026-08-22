@@ -58,6 +58,27 @@ attempt to restart that service while preserving the original failure status.
 
 Read the [upgrade guide](upgrade.md) before upgrading an existing installation.
 
+### Optional feature packages
+
+Two feature sets are not installed by default because most bots do not need them:
+the profanity filter (`better-profanity`, `unidecode`) and geocoding extras
+(`pycountry`, `us`). A fresh install and a `--upgrade` both prompt for each one.
+
+For an unattended run, install both without prompting:
+
+```bash
+sudo ./install-service.sh --upgrade --install-extras
+```
+
+`--install-extras` also works alongside `--update-venv`, which otherwise keeps
+whatever is already in the virtual environment and does not prompt:
+
+```bash
+sudo ./install-service.sh -u --update-venv --install-extras
+```
+
+A failed extras install is non-fatal; the bot installs and starts without them.
+
 ## Manual Installation
 
 If you prefer to install manually:

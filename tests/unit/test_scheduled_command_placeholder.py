@@ -42,6 +42,8 @@ def _make_command(*, name, keywords, reply, enabled=True, admin=False, delay=0.0
     cmd._derive_config_section_name.return_value = f"{name.title()}_Command"
     cmd.get_config_value.return_value = enabled
     cmd.requires_admin_access.return_value = admin
+    # Off cooldown unless a test says otherwise.
+    cmd.check_cooldown.return_value = (True, 0.0)
 
     async def execute(message):
         if delay:
@@ -270,3 +272,146 @@ class TestRenderWithRealCommand:
         assert rendered, "a real ping should produce text"
         mgr.send_dm.assert_not_called()
         mgr.send_channel_message.assert_not_called()
+
+
+@pytest.mark.unit
+class TestCommandCooldownStillApplies:
+    """A schedule is not a licence to outrun a command's configured cooldown."""
+
+    @pytest.mark.asyncio
+    async def test_render_refused_while_on_cooldown(self, mock_bot):
+        wx = _make_command(name="wx", keywords=["wx"], reply="12C")
+        wx.check_cooldown.return_value = (False, 42.0)
+        mgr = _make_manager(mock_bot, {"wx": wx})
+        assert await mgr.render_command_output("wx Seattle") is None
+
+    @pytest.mark.asyncio
+    async def test_render_records_execution_so_cooldown_advances(self, mock_bot):
+        wx = _make_command(name="wx", keywords=["wx"], reply="12C")
+        wx.check_cooldown.return_value = (True, 0.0)
+        mgr = _make_manager(mock_bot, {"wx": wx})
+        assert await mgr.render_command_output("wx Seattle") == "12C"
+        wx.record_execution.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execution_recorded_even_if_command_then_fails(self, mock_bot):
+        """Recorded before execute, so a failing render cannot be retried immediately."""
+        boom = _make_command(name="boom", keywords=["boom"], reply=None)
+        boom.check_cooldown.return_value = (True, 0.0)
+
+        async def explode(message):
+            raise RuntimeError("kaboom")
+
+        boom.execute = explode
+        mgr = _make_manager(mock_bot, {"boom": boom})
+        assert await mgr.render_command_output("boom") is None
+        boom.record_execution.assert_called_once()
+
+
+@pytest.mark.unit
+class TestMinimumIntervalFloor:
+    """{cmd:...} schedules may not fire more often than every 15 minutes."""
+
+    @staticmethod
+    def _interval(cron):
+        import datetime
+
+        from apscheduler.triggers.cron import CronTrigger
+
+        from modules.scheduler import MessageScheduler
+
+        tz = datetime.timezone.utc
+        trigger = CronTrigger.from_crontab(cron, timezone=tz)
+        return MessageScheduler._min_fire_interval_seconds(trigger, tz)
+
+    def test_floor_is_fifteen_minutes(self):
+        from modules.scheduler import MessageScheduler
+
+        assert MessageScheduler.MIN_COMMAND_PLACEHOLDER_INTERVAL_SECONDS == 900
+
+    @pytest.mark.parametrize("cron,expected", [
+        ("*/5 * * * *", 300),
+        ("*/15 * * * *", 900),
+        ("*/30 * * * *", 1800),
+        ("0 * * * *", 3600),
+        ("0 6,12,18 * * *", 21600),
+    ])
+    def test_even_schedules_measured_correctly(self, cron, expected):
+        assert self._interval(cron) == expected
+
+    def test_uneven_cron_measured_by_its_tightest_gap(self):
+        """0,1 * * * * is a 60-second schedule, not an hourly one."""
+        assert self._interval("0,1 * * * *") == 60
+
+    def test_daily_schedule_is_well_above_the_floor(self):
+        from modules.scheduler import MessageScheduler
+
+        assert self._interval("0 8 * * *") > MessageScheduler.MIN_COMMAND_PLACEHOLDER_INTERVAL_SECONDS
+
+    @pytest.mark.parametrize("cron,allowed", [
+        ("* * * * *", False),
+        ("*/5 * * * *", False),
+        ("*/14 * * * *", False),
+        ("0,1 * * * *", False),
+        ("*/15 * * * *", True),
+        ("*/30 * * * *", True),
+        ("0 6,12,18 * * *", True),
+    ])
+    def test_floor_admits_and_rejects_the_right_schedules(self, cron, allowed):
+        from modules.scheduler import MessageScheduler
+
+        interval = self._interval(cron)
+        floor = MessageScheduler.MIN_COMMAND_PLACEHOLDER_INTERVAL_SECONDS
+        assert (interval >= floor) is allowed
+
+
+@pytest.mark.unit
+class TestFloorEnforcedDuringSetup:
+    """The floor has to actually stop the job being scheduled, not just compute a number."""
+
+    @staticmethod
+    def _run_setup(entries):
+        import configparser
+        from unittest.mock import patch
+
+        from modules.scheduler import MessageScheduler
+
+        config = configparser.ConfigParser()
+        config["Bot"] = {"timezone": "UTC"}
+        config["Scheduled_Messages"] = entries
+
+        bot = MagicMock()
+        bot.config = config
+
+        sched = object.__new__(MessageScheduler)
+        sched.bot = bot
+        sched.logger = MagicMock()
+        sched.scheduled_messages = {}
+        sched._shutdown_apscheduler_if_running = MagicMock()
+        sched._setup_device_mode_scheduler_jobs = MagicMock()
+        sched.setup_interval_advertising = MagicMock()
+
+        fake_scheduler = MagicMock()
+        with patch("modules.scheduler.BackgroundScheduler", return_value=fake_scheduler):
+            sched.setup_scheduled_messages()
+        return sched, fake_scheduler
+
+    def test_too_frequent_command_schedule_is_not_added(self):
+        sched, apsched = self._run_setup({"*/5 * * * *": "Public:{cmd:wx Seattle}"})
+        assert apsched.add_job.call_count == 0
+        assert sched.scheduled_messages == {}
+        assert sched.logger.error.called
+
+    def test_uneven_cron_with_tight_gap_is_not_added(self):
+        _, apsched = self._run_setup({"0,1 * * * *": "Public:{cmd:wx Seattle}"})
+        assert apsched.add_job.call_count == 0
+
+    def test_schedule_at_the_floor_is_added(self):
+        sched, apsched = self._run_setup({"*/15 * * * *": "Public:{cmd:wx Seattle}"})
+        assert apsched.add_job.call_count == 1
+        assert sched.scheduled_messages
+
+    def test_frequent_schedule_without_placeholder_is_unaffected(self):
+        """The floor applies to command placeholders, not to plain scheduled text."""
+        _, apsched = self._run_setup({"*/5 * * * *": "Public:static message"})
+        assert apsched.add_job.call_count == 1

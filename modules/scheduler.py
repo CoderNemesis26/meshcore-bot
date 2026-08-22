@@ -137,6 +137,18 @@ class MessageScheduler:
                     channel, message, scope = parse_scheduled_message_value(message_info)
                     message = decode_escape_sequences(message)
 
+                    if self._has_command_placeholders(message):
+                        interval = self._min_fire_interval_seconds(parsed.trigger, tz)
+                        floor = self.MIN_COMMAND_PLACEHOLDER_INTERVAL_SECONDS
+                        if interval is not None and interval < floor:
+                            self.logger.error(
+                                "Scheduled message %r uses a {cmd:...} placeholder but fires "
+                                "every %.0fs; the minimum is %ds because each firing spends "
+                                "airtime. Not scheduled: %s",
+                                schedule_key, interval, floor, message,
+                            )
+                            continue
+
                     job_id = "schedmsg_" + hashlib.sha256(
                         f"{schedule_key}\0{channel}\0{scope or ''}\0{message}".encode()
                     ).hexdigest()[:24]
@@ -494,6 +506,38 @@ class MessageScheduler:
     # {cmd:<command> [args]} — run a command and substitute its reply text.
     # Non-greedy and brace-free inside, matching the placeholder limits elsewhere.
     _COMMAND_PLACEHOLDER_RE = re.compile(r"\{cmd:([^{}]+)\}")
+
+    # Floor on how often a schedule containing {cmd:...} may fire. Every firing is a
+    # transmission on a shared medium, and a command placeholder makes it trivial to
+    # write a cron that airs several times an hour. Deliberately not configurable.
+    MIN_COMMAND_PLACEHOLDER_INTERVAL_SECONDS = 900
+
+    @staticmethod
+    def _min_fire_interval_seconds(trigger, tz, samples: int = 12) -> Optional[float]:
+        """Smallest gap between consecutive firings of *trigger*, in seconds.
+
+        Sampled rather than derived, so uneven crons are measured by their tightest
+        gap: ``0,1 * * * *`` is a 60-second schedule, not a half-hourly one.
+
+        Returns None when the trigger has no future firings to compare.
+        """
+        now = datetime.datetime.now(tz)
+        previous = trigger.get_next_fire_time(None, now)
+        if previous is None:
+            return None
+
+        smallest = None
+        for _ in range(samples):
+            nxt = trigger.get_next_fire_time(
+                previous, previous + datetime.timedelta(microseconds=1)
+            )
+            if nxt is None:
+                break
+            gap = (nxt - previous).total_seconds()
+            if gap > 0 and (smallest is None or gap < smallest):
+                smallest = gap
+            previous = nxt
+        return smallest
 
     def _has_command_placeholders(self, message: str) -> bool:
         return bool(self._COMMAND_PLACEHOLDER_RE.search(message))

@@ -31,7 +31,11 @@ semantic versioning.
   setting. The command runs for its text only and transmits nothing itself
   (`CommandManager.render_command_output`); unknown, disabled, admin-only, timing-out
   and silent commands expand to nothing rather than airing raw placeholder text.
-  Bounded by the new `[Bot] scheduled_command_timeout_seconds` (default 30).
+  Bounded by the new `[Bot] scheduled_command_timeout_seconds` (default 30). Two
+  non-configurable airtime guards apply: a schedule using `{cmd:...}` must not fire
+  more often than every 15 minutes (rejected at startup, measured by the tightest gap
+  so `0,1 * * * *` counts as 60 seconds), and the command's own `cooldown_seconds` is
+  still enforced.
 - `{path_distance}` is now available in the path command's `[Path_Command] reply_prefix`,
   reporting total distance travelled (sender → hops → bot, e.g. `12.4km`) and rendering
   empty when any node in the chain has no usable coordinates. The prefix now supports the

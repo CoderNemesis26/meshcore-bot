@@ -1920,6 +1920,19 @@ class CommandManager:
             )
             return None
 
+        # The command's own cooldown still governs it. A schedule is not a licence to
+        # run something more often than the operator configured it to run.
+        allowed, remaining = command.check_cooldown()
+        if not allowed:
+            self.logger.warning(
+                "Scheduled {cmd:...} placeholder: %r is on cooldown for another %.0fs; skipped",
+                command_name, remaining,
+            )
+            return None
+        # Recorded before execution, matching execute_commands, so a slow or failing
+        # render cannot be retried straight past the cooldown.
+        command.record_execution()
+
         sink: list[str] = []
         synthetic = MeshMessage(
             content=spec,
