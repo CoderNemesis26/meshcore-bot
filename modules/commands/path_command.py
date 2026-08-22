@@ -382,13 +382,31 @@ class PathCommand(BaseCommand):
         bph = self._bytes_per_hop_from_nodes_and_routing(node_ids, routing_info)
         return bph >= self.minimum_path_bytes
 
-    def _format_path_distance(self) -> str:
+    def _store_path_distance(
+        self, distance_km: Optional[float], message: Optional[MeshMessage]
+    ) -> None:
+        """Record the distance for this request.
+
+        Attached to the message when we have it, because the decode above awaits a
+        database lookup and a second path command can interleave there. Instance
+        state would let one request render the other's distance. The attribute
+        fallback keeps direct calls (and existing tests) working.
+        """
+        if message is not None:
+            message._path_distance_km = distance_km  # type: ignore[attr-defined]
+        self._last_path_distance_km = distance_km
+
+    def _format_path_distance(self, message: Optional[MeshMessage] = None) -> str:
         """Render the {path_distance} placeholder; empty when the path cannot be measured.
 
         Matches the ``{path_distance}`` name and ``12.4km`` shape already used by the
         test command, so one prefix template reads the same across both commands.
         """
-        distance = getattr(self, '_last_path_distance_km', None)
+        distance = None
+        if message is not None:
+            distance = getattr(message, '_path_distance_km', None)
+        if distance is None:
+            distance = getattr(self, '_last_path_distance_km', None)
         if distance is None:
             return ''
         return f"{distance:.1f}km"
@@ -397,7 +415,7 @@ class PathCommand(BaseCommand):
         if not self.path_reply_prefix:
             return ''
         fields = self.get_standard_placeholder_fields(message)
-        fields['path_distance'] = self._format_path_distance()
+        fields['path_distance'] = self._format_path_distance(message)
         formatted = format_piped_template(
             self.path_reply_prefix,
             {k: str(v) for k, v in fields.items()},
@@ -418,14 +436,19 @@ class PathCommand(BaseCommand):
         )
 
     async def _decode_node_ids(
-        self, node_ids: list[str], routing_info: Optional[dict[str, Any]] = None
+        self,
+        node_ids: list[str],
+        routing_info: Optional[dict[str, Any]] = None,
+        message: Optional[MeshMessage] = None,
     ) -> str:
         self.logger.info(f"Decoding path with {len(node_ids)} nodes: {','.join(node_ids)}")
         if not self._should_resolve_repeater_names(node_ids, routing_info):
-            self._last_path_distance_km = None
+            self._store_path_distance(None, message)
             return self._format_repeater_resolution_deferred(node_ids)
         repeater_info = await self._lookup_repeater_names(node_ids)
-        self._last_path_distance_km = self._calculate_path_distance_km(node_ids, repeater_info)
+        self._store_path_distance(
+            self._calculate_path_distance_km(node_ids, repeater_info), message
+        )
         return self._format_path_response(node_ids, repeater_info)
 
     def can_execute(self, message: MeshMessage, skip_channel_check: bool = False) -> bool:
@@ -475,18 +498,21 @@ class PathCommand(BaseCommand):
 
         if len(parts) < 2:
             # No arguments provided - try to extract path from current message
-            response = await self._extract_path_from_recent_messages()
+            response = await self._extract_path_from_recent_messages(message)
         else:
             # Extract path data from the command
             path_input = " ".join(parts[1:])
-            response = await self._decode_path(path_input)
+            response = await self._decode_path(path_input, message=message)
 
         # Send the response (may be split into multiple messages if long)
         await self._send_path_response(message, response)
         return True
 
     async def _decode_path(
-        self, path_input: str, routing_info: Optional[dict[str, Any]] = None
+        self,
+        path_input: str,
+        routing_info: Optional[dict[str, Any]] = None,
+        message: Optional[MeshMessage] = None,
     ) -> str:
         """Decode hex path data to repeater names.
         Comma-separated tokens infer hop size (2, 4, or 6 hex chars per node).
@@ -517,7 +543,7 @@ class PathCommand(BaseCommand):
             if not node_ids:
                 return self.translate('commands.path.no_valid_hex')
 
-            return await self._decode_node_ids(node_ids, routing_info)
+            return await self._decode_node_ids(node_ids, routing_info, message=message)
 
         except Exception as e:
             self.logger.error(f"Error decoding path: {e}")
@@ -1080,7 +1106,9 @@ class PathCommand(BaseCommand):
             out = (prefix + current_message.rstrip()) if message_count == 0 else current_message.rstrip()
             await self.send_response(message, out, skip_user_rate_limit=True)
 
-    async def _extract_path_from_recent_messages(self) -> str:
+    async def _extract_path_from_recent_messages(
+        self, message: Optional[MeshMessage] = None
+    ) -> str:
         """Extract path from the current message's path information (same as test command).
         Prefers already-extracted routing_info.path_nodes when present (multi-byte path support).
         """
@@ -1099,7 +1127,7 @@ class PathCommand(BaseCommand):
                 path_nodes = routing_info.get('path_nodes', [])
                 if path_nodes:
                     node_ids = [n.upper() for n in path_nodes]
-                    return await self._decode_node_ids(node_ids, routing_info)
+                    return await self._decode_node_ids(node_ids, routing_info, message=message)
 
             # Fallback: parse message.path string (e.g. no routing_info or legacy path)
             if not msg.path:
@@ -1112,7 +1140,7 @@ class PathCommand(BaseCommand):
             path_part = path_string.split(" via ROUTE_TYPE_")[0] if " via ROUTE_TYPE_" in path_string else path_string
 
             if ',' in path_part:
-                return await self._decode_path(path_part, routing_info)
+                return await self._decode_path(path_part, routing_info, message=message)
             hex_pattern = rf'[0-9a-fA-F]{{{getattr(self.bot, "prefix_hex_chars", 2)}}}'
             if re.search(hex_pattern, path_part):
                 return await self._decode_path(path_part, routing_info)

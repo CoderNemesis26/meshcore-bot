@@ -1548,30 +1548,55 @@ class MessageHandler:
                         self.logger.debug(f"Found exact packet prefix match: {rf_packet_prefix}")
                         return accepted
 
-        # Strategy 2: Try pubkey prefix match (for message correlation)
+        # Strategy 2: Try pubkey prefix match (for message correlation).
+        # A pubkey prefix identifies a sender, not one transmission. When the cache
+        # holds several packets from that sender the match is ambiguous, so take the
+        # newest and mark it non-authoritative rather than attributing its route.
         if correlation_key:
-            for data in recent_data:
-                rf_pubkey_prefix = data.get("pubkey_prefix", "") or ""
-                if rf_pubkey_prefix == correlation_key:
-                    accepted = _accept(data, RF_MATCH_PUBKEY)
-                    if accepted:
-                        self.logger.debug(f"Found exact pubkey prefix match: {rf_pubkey_prefix}")
-                        return accepted
+            pubkey_matches = [
+                data for data in recent_data
+                if (data.get("pubkey_prefix", "") or "") == correlation_key
+            ]
+            if pubkey_matches:
+                newest = max(pubkey_matches, key=lambda x: x["timestamp"])
+                unique = len(pubkey_matches) == 1
+                accepted = _accept(newest, RF_MATCH_PUBKEY if unique else RF_MATCH_FALLBACK)
+                if accepted:
+                    if unique:
+                        self.logger.debug(f"Found exact pubkey prefix match: {correlation_key}")
+                    else:
+                        self.logger.debug(
+                            "%d cached packets share pubkey prefix %s; using the newest "
+                            "for signal only, not for routing",
+                            len(pubkey_matches), correlation_key,
+                        )
+                    return accepted
 
-        # Strategy 3: Try partial packet prefix matches
+        # Strategy 3: Try partial packet prefix matches. Same ambiguity caveat as
+        # above: a shared 16-character prefix is not proof of the same transmission.
         if correlation_key:
+            partial_matches = []
             for data in recent_data:
                 rf_packet_prefix = data.get("packet_prefix", "") or ""
-                # Check for partial match (at least 16 characters)
                 min_length = min(len(rf_packet_prefix), len(correlation_key), 16)
                 if rf_packet_prefix[:min_length] == correlation_key[:min_length] and min_length >= 16:
-                    accepted = _accept(data, RF_MATCH_PARTIAL)
-                    if accepted:
+                    partial_matches.append(data)
+            if partial_matches:
+                newest = max(partial_matches, key=lambda x: x["timestamp"])
+                unique = len(partial_matches) == 1
+                accepted = _accept(newest, RF_MATCH_PARTIAL if unique else RF_MATCH_FALLBACK)
+                if accepted:
+                    if unique:
                         self.logger.debug(
-                            f"Found partial packet prefix match: {rf_packet_prefix[:16]}... "
-                            f"matches {correlation_key[:16]}..."
+                            f"Found partial packet prefix match for {correlation_key[:16]}..."
                         )
-                        return accepted
+                    else:
+                        self.logger.debug(
+                            "%d cached packets share the partial prefix %s...; using the "
+                            "newest for signal only, not for routing",
+                            len(partial_matches), correlation_key[:16],
+                        )
+                    return accepted
 
         # Strategy 4: Use most recent data (fallback for timing issues)
         if recent_data:
@@ -2329,21 +2354,35 @@ class MessageHandler:
                     scope_packet_info["packet_hash"] = scope_rf_data["packet_hash"]
 
             # Scope matching: use scope-eligible RF only (never a stale ADVERT fallback).
+            # The scope also has to come from *this* message's packet. The HMAC proves
+            # the cached packet belongs to an allowed scope, not that this message does,
+            # so an uncorrelated fallback would let a recent allowed-scope packet admit
+            # an unrelated message past the flood_scopes allowlist.
             reply_scope: str | None = None
             cmd_mgr = getattr(self.bot, "command_manager", None)
             scope_keys = getattr(cmd_mgr, "flood_scope_keys", {})
+            scope_rf_is_correlated = rf_data_is_correlated(scope_rf_data)
             if scope_rf_data and scope_keys:
-                reply_scope = self._resolve_reply_scope_from_rf_data(
-                    scope_rf_data, scope_packet_info, scope_keys
-                )
+                if scope_rf_is_correlated:
+                    reply_scope = self._resolve_reply_scope_from_rf_data(
+                        scope_rf_data, scope_packet_info, scope_keys
+                    )
+                else:
+                    self.logger.info(
+                        "Scope for this channel message is unknown: the only scope-eligible "
+                        "RF data is an uncorrelated fallback from another packet, so it "
+                        "cannot authorise a reply under flood_scopes"
+                    )
 
             # Allowlist enforcement: when flood_scopes is configured, only reply to
             # messages whose scope matched an entry.  Unscoped FLOOD is allowed only
             # when '*' (or equivalent) is explicitly listed.
             if scope_keys and reply_scope is None:
                 allow_global = getattr(cmd_mgr, "flood_scope_allow_global", False)
-                if scope_rf_data and self._is_rf_data_scope_eligible(
-                    scope_rf_data, scope_packet_info
+                if (
+                    scope_rf_data
+                    and scope_rf_is_correlated
+                    and self._is_rf_data_scope_eligible(scope_rf_data, scope_packet_info)
                 ):
                     self.logger.info("Ignoring TC_FLOOD: scope not in flood_scopes allowlist")
                     return

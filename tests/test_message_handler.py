@@ -2219,3 +2219,65 @@ class TestRfCorrelationProvenance:
         handler.recent_rf_data = [entry]
         handler.find_recent_rf_data()
         assert RF_MATCH_KEY not in entry
+
+
+class TestAmbiguousPrefixIsNotAuthoritative:
+    """A pubkey or partial prefix identifies a sender, not one transmission. When
+    several cached packets share it the match cannot carry a route (#80 follow-up)."""
+
+    @staticmethod
+    def _entry(ts_offset, **over):
+        entry = {
+            "timestamp": time.time() - ts_offset,
+            "snr": 5,
+            "rssi": -80,
+            "packet_prefix": "",
+            "pubkey_prefix": "",
+        }
+        entry.update(over)
+        return entry
+
+    def test_single_pubkey_match_is_authoritative(self, handler):
+        handler.rf_data_timeout = 30
+        handler.recent_rf_data = [self._entry(1, pubkey_prefix="abcd")]
+        result = handler.find_recent_rf_data("abcd")
+        assert result[RF_MATCH_KEY] == RF_MATCH_PUBKEY
+        assert rf_data_is_correlated(result) is True
+
+    def test_several_packets_from_one_sender_are_not_authoritative(self, handler):
+        handler.rf_data_timeout = 30
+        handler.recent_rf_data = [
+            self._entry(9, pubkey_prefix="abcd", snr=1),
+            self._entry(1, pubkey_prefix="abcd", snr=2),
+        ]
+        result = handler.find_recent_rf_data("abcd")
+        assert rf_data_is_correlated(result) is False
+        # Still the newest, so signal figures remain the best available guess.
+        assert result["snr"] == 2
+
+    def test_single_partial_match_is_authoritative(self, handler):
+        handler.rf_data_timeout = 30
+        prefix = "aabbccddeeff0011aabbccddeeff0011"
+        handler.recent_rf_data = [self._entry(1, packet_prefix=prefix)]
+        result = handler.find_recent_rf_data("aabbccddeeff0011" + "f" * 16)
+        assert rf_data_is_correlated(result) is True
+
+    def test_several_partial_matches_are_not_authoritative(self, handler):
+        handler.rf_data_timeout = 30
+        handler.recent_rf_data = [
+            self._entry(9, packet_prefix="aabbccddeeff0011" + "1" * 16),
+            self._entry(1, packet_prefix="aabbccddeeff0011" + "2" * 16),
+        ]
+        result = handler.find_recent_rf_data("aabbccddeeff0011" + "f" * 16)
+        assert rf_data_is_correlated(result) is False
+
+    def test_exact_packet_prefix_stays_authoritative_with_others_present(self, handler):
+        handler.rf_data_timeout = 30
+        exact = "deadbeefdeadbeef1234567890abcdef"
+        handler.recent_rf_data = [
+            self._entry(9, pubkey_prefix="abcd"),
+            self._entry(1, packet_prefix=exact, pubkey_prefix="abcd"),
+        ]
+        result = handler.find_recent_rf_data(exact)
+        assert result[RF_MATCH_KEY] == RF_MATCH_EXACT
+        assert rf_data_is_correlated(result) is True

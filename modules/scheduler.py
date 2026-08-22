@@ -619,9 +619,33 @@ class MessageScheduler:
             username = ""
 
         budget = 160 - len(username.encode("utf-8")) - 2
-        if scope and scope.strip():
+        if (scope or "").strip():
             budget -= CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD
         return max(budget, 32)
+
+    def _effective_send_scope(self, channel: str, scope: str | None) -> str | None:
+        """The scope the send will actually use, not just the one on the schedule.
+
+        send_channel_message resolves an unset scope from ``flood_scope.<channel>`` and
+        then ``outgoing_flood_scope_override``. Budgeting on the raw schedule scope
+        alone would size chunks for a global send and overshoot by the regional header
+        once the sender adds it.
+        """
+        if (scope or "").strip():
+            return scope
+        try:
+            resolved = self.bot.command_manager.resolve_channel_send_scope(
+                scope=None, channel=channel
+            )
+            if (resolved or "").strip():
+                return resolved
+            override = self.bot.config.get(
+                "Channels", "outgoing_flood_scope_override", fallback=""
+            )
+            return override if (override or "").strip() else None
+        except Exception:  # noqa: BLE001 - budgeting must never break a send
+            # Unknown means assume regional, which only ever makes chunks smaller.
+            return "#unknown"
 
     @staticmethod
     def _split_to_budget(text: str, budget: int) -> list[str]:
@@ -704,7 +728,8 @@ class MessageScheduler:
         # A {cmd:...} placeholder can expand to more than one message's worth of text,
         # and send_channel_message does not split. Chunk to the RF body budget so a
         # long rendered reply airs as several messages instead of failing at the device.
-        chunks = self._split_to_budget(message, self._channel_body_budget(scope))
+        effective_scope = self._effective_send_scope(channel, scope)
+        chunks = self._split_to_budget(message, self._channel_body_budget(effective_scope))
         if len(chunks) > 1:
             self.logger.info(
                 "Scheduled message for %s split into %d chunks to fit the RF budget",
