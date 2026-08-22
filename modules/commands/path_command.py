@@ -402,10 +402,12 @@ class PathCommand(BaseCommand):
         Matches the ``{path_distance}`` name and ``12.4km`` shape already used by the
         test command, so one prefix template reads the same across both commands.
         """
-        distance = None
+        # Only consult instance state when there is no request to read from. Falling
+        # back on a request-local None would render another request's distance next to
+        # a reply that has none of its own.
         if message is not None:
             distance = getattr(message, '_path_distance_km', None)
-        if distance is None:
+        else:
             distance = getattr(self, '_last_path_distance_km', None)
         if distance is None:
             return ''
@@ -447,7 +449,7 @@ class PathCommand(BaseCommand):
             return self._format_repeater_resolution_deferred(node_ids)
         repeater_info = await self._lookup_repeater_names(node_ids)
         self._store_path_distance(
-            self._calculate_path_distance_km(node_ids, repeater_info), message
+            self._calculate_path_distance_km(node_ids, repeater_info, message), message
         )
         return self._format_path_response(node_ids, repeater_info)
 
@@ -864,13 +866,20 @@ class PathCommand(BaseCommand):
         return None
 
 
-    def _get_sender_location(self) -> Optional[tuple[float, float]]:
-        """Get sender location from current message if available"""
+    def _get_sender_location(
+        self, message: Optional[MeshMessage] = None
+    ) -> Optional[tuple[float, float]]:
+        """Get sender location for this request.
+
+        Takes the request's own message; ``_current_message`` is shared instance
+        state and a concurrent path command can replace it mid-request.
+        """
         try:
-            if not hasattr(self, '_current_message') or not self._current_message:
+            request = message if message is not None else getattr(self, '_current_message', None)
+            if not request:
                 return None
 
-            sender_pubkey = self._current_message.sender_pubkey
+            sender_pubkey = request.sender_pubkey
             if not sender_pubkey:
                 return None
 
@@ -969,7 +978,10 @@ class PathCommand(BaseCommand):
         )
 
     def _calculate_path_distance_km(
-        self, node_ids: list[str], repeater_info: dict[str, dict[str, Any]]
+        self,
+        node_ids: list[str],
+        repeater_info: dict[str, dict[str, Any]],
+        message: Optional[MeshMessage] = None,
     ) -> Optional[float]:
         """Total distance along sender -> each hop -> bot, in kilometres.
 
@@ -981,7 +993,7 @@ class PathCommand(BaseCommand):
 
         chain: list[tuple[float, float]] = []
 
-        sender = self._get_sender_location()
+        sender = self._get_sender_location(message)
         if sender is None:
             return None
         chain.append(sender)
@@ -1113,10 +1125,11 @@ class PathCommand(BaseCommand):
         Prefers already-extracted routing_info.path_nodes when present (multi-byte path support).
         """
         try:
-            if not hasattr(self, '_current_message') or not self._current_message:
+            request = message if message is not None else getattr(self, '_current_message', None)
+            if not request:
                 return self.translate('commands.path.no_path')
 
-            msg = self._current_message
+            msg = request
 
             # Prefer routing_info when present (no re-parsing; preserves bytes_per_hop)
             routing_info = getattr(msg, 'routing_info', None)
@@ -1143,7 +1156,7 @@ class PathCommand(BaseCommand):
                 return await self._decode_path(path_part, routing_info, message=message)
             hex_pattern = rf'[0-9a-fA-F]{{{getattr(self.bot, "prefix_hex_chars", 2)}}}'
             if re.search(hex_pattern, path_part):
-                return await self._decode_path(path_part, routing_info)
+                return await self._decode_path(path_part, routing_info, message=message)
             return self.translate('commands.path.path_prefix', path_string=path_string)
 
         except Exception as e:

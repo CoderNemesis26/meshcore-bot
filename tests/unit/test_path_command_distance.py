@@ -23,7 +23,7 @@ class TestPathCommandDistance:
         # Bot sits at the origin; sender and hops are placed east of it.
         cmd.bot_latitude = 47.0
         cmd.bot_longitude = -122.0
-        cmd._get_sender_location = lambda: (47.0, -122.5)
+        cmd._get_sender_location = lambda message=None: (47.0, -122.5)
         return cmd
 
     @staticmethod
@@ -66,7 +66,7 @@ class TestPathCommandDistance:
         assert path_command._calculate_path_distance_km(['AA'], info) is None
 
     def test_blank_when_sender_location_unknown(self, path_command):
-        path_command._get_sender_location = lambda: None
+        path_command._get_sender_location = lambda message=None: None
         info = {'AA': self._info(47.0, -122.4)}
         assert path_command._calculate_path_distance_km(['AA'], info) is None
 
@@ -98,7 +98,7 @@ class TestDistanceThroughTheRealLookup:
         cmd = PathCommand(mock_bot)
         cmd.bot_latitude = 47.0
         cmd.bot_longitude = -122.0
-        cmd._get_sender_location = lambda: (47.0, -122.5)
+        cmd._get_sender_location = lambda message=None: (47.0, -122.5)
         return cmd
 
     @staticmethod
@@ -145,3 +145,53 @@ class TestDistanceThroughTheRealLookup:
             ['AA'], lookup_func=lambda node_id: [self._row(node_id, None, None)]
         )
         assert path_command._calculate_path_distance_km(['AA'], info) is None
+
+
+@pytest.mark.unit
+class TestDistanceIsRequestScoped:
+    """Two path commands can interleave: the decode awaits a database lookup and the
+    dispatcher runs handlers as independent tasks. Neither may see the other's value."""
+
+    @pytest.fixture
+    def path_command(self, mock_bot):
+        from modules.commands.path_command import PathCommand
+
+        cmd = PathCommand(mock_bot)
+        cmd.bot_latitude = 47.0
+        cmd.bot_longitude = -122.0
+        return cmd
+
+    @staticmethod
+    def _msg(sender):
+        from modules.models import MeshMessage
+
+        return MeshMessage(content="path", sender_id=sender, channel="#general")
+
+    def test_a_request_without_a_distance_does_not_borrow_another(self, path_command):
+        """The exact leak: B stores None, A stores a value, B must still render ''."""
+        a, b = self._msg("a"), self._msg("b")
+        path_command._store_path_distance(None, b)
+        path_command._store_path_distance(42.0, a)
+
+        assert path_command._format_path_distance(b) == ""
+        assert path_command._format_path_distance(a) == "42.0km"
+
+    def test_interleaved_requests_keep_their_own_values(self, path_command):
+        a, b = self._msg("a"), self._msg("b")
+        path_command._store_path_distance(10.0, a)
+        path_command._store_path_distance(20.0, b)
+
+        assert path_command._format_path_distance(a) == "10.0km"
+        assert path_command._format_path_distance(b) == "20.0km"
+
+    def test_sender_location_uses_the_request_not_shared_state(self, path_command):
+        """_current_message is shared; a concurrent command can replace it."""
+        a, b = self._msg("a"), self._msg("b")
+        a.sender_pubkey = "aa" * 32
+        b.sender_pubkey = "bb" * 32
+        path_command._current_message = b  # as if another request overwrote it
+
+        seen = {}
+        path_command.bot.db_manager.execute_query = lambda q, params: seen.setdefault('key', params[0]) and []
+        path_command._get_sender_location(a)
+        assert seen['key'] == a.sender_pubkey

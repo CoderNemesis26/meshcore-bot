@@ -2386,6 +2386,20 @@ class MessageHandler:
                 ):
                     self.logger.info("Ignoring TC_FLOOD: scope not in flood_scopes allowlist")
                     return
+                # '*' permits *unscoped global* traffic, not traffic of unknown scope.
+                # If a scope-eligible packet was heard recently but could not be tied to
+                # this message, we have no evidence this message is global, so '*' must
+                # not admit it. No scope-eligible packet at all is different: nothing
+                # scoped was heard, which is what a genuinely global message looks like,
+                # so the operator's '*' still applies there.
+                if allow_global and scope_rf_data is not None and not scope_rf_is_correlated:
+                    self.logger.info(
+                        "Ignoring channel message: '*' allows global traffic, but a "
+                        "scope-eligible packet was heard that could not be correlated "
+                        "to this message, so its scope is unknown rather than global"
+                    )
+                    return
+
                 if not allow_global:
                     if scope_rf_data is None:
                         self.logger.info(
