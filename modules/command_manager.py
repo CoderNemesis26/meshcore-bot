@@ -1681,6 +1681,13 @@ class CommandManager:
             bool: True if response was sent successfully, False otherwise.
         """
         try:
+            # Render-only invocation (see render_command_output): collect the text and
+            # transmit nothing. Checked before _last_response so a background render
+            # cannot overwrite the response captured for a real user's command.
+            if getattr(message, 'capture_sink', None) is not None:
+                message.capture_sink.append(content)
+                return True
+
             # Store the response content for web viewer capture
             if hasattr(self, '_last_response'):
                 self._last_response = content
@@ -1836,6 +1843,113 @@ class CommandManager:
             rate_limit_key=rate_limit_key,
             scope=getattr(message, 'reply_scope', None),
         )
+
+    # Commands that transmit directly instead of going through send_response cannot be
+    # captured, so rendering them would send the real thing as a side effect.
+    NON_RENDERABLE_COMMANDS = frozenset({'announcements', 'announce'})
+
+    def resolve_command_by_trigger(self, trigger: str):
+        """Find the command a trigger word would invoke, or None.
+
+        Matches the command's registered name first, then its keywords, so
+        ``wx`` and ``weather`` both resolve to the same command.
+        """
+        wanted = (trigger or "").strip().lower()
+        if not wanted:
+            return None
+        for command_name, command in self.commands.items():
+            if wanted == command_name.lower():
+                return command
+            keywords = getattr(command, 'keywords', None) or []
+            if wanted in [str(k).lower() for k in keywords]:
+                return command
+        return None
+
+    async def render_command_output(
+        self,
+        spec: str,
+        *,
+        channel: str | None = None,
+        timeout: float = 30.0,
+    ) -> str | None:
+        """Run a command for its reply text without transmitting it.
+
+        Used by ``{cmd:...}`` placeholders in scheduled messages, so an operator can
+        broadcast the output of any command on a cron schedule instead of each service
+        growing its own schedule parser.
+
+        Args:
+            spec: Full invocation as an operator would type it, e.g. ``wx Seattle``.
+            channel: Channel the rendered text is destined for, so channel-scoped
+                behavior in the command sees the right context.
+            timeout: Seconds to wait before abandoning the render.
+
+        Returns:
+            The reply text, or None when the command is unknown, disabled, admin-only,
+            not renderable, times out, or produces nothing.
+        """
+        spec = (spec or "").strip()
+        if not spec:
+            return None
+
+        trigger = spec.split()[0]
+        command = self.resolve_command_by_trigger(trigger)
+        if command is None:
+            self.logger.warning("Scheduled {cmd:...} placeholder: unknown command %r", trigger)
+            return None
+
+        command_name = getattr(command, 'name', trigger)
+        if command_name in self.NON_RENDERABLE_COMMANDS:
+            self.logger.warning(
+                "Scheduled {cmd:...} placeholder: %r sends its own messages and cannot be rendered",
+                command_name,
+            )
+            return None
+
+        section = command._derive_config_section_name()
+        if not command.get_config_value(section, 'enabled', fallback=True, value_type='bool'):
+            self.logger.warning(
+                "Scheduled {cmd:...} placeholder: %r is disabled in config", command_name
+            )
+            return None
+
+        if command.requires_admin_access():
+            self.logger.warning(
+                "Scheduled {cmd:...} placeholder: refusing to run admin command %r",
+                command_name,
+            )
+            return None
+
+        sink: list[str] = []
+        synthetic = MeshMessage(
+            content=spec,
+            sender_id=None,
+            channel=channel,
+            is_dm=False,
+            timestamp=int(time.time()),
+            capture_sink=sink,
+        )
+
+        try:
+            await asyncio.wait_for(command.execute(synthetic), timeout=timeout)
+        except asyncio.TimeoutError:
+            self.logger.warning(
+                "Scheduled {cmd:...} placeholder: %r timed out after %ss", command_name, timeout
+            )
+            return None
+        except Exception as e:
+            self.logger.warning(
+                "Scheduled {cmd:...} placeholder: %r failed: %s: %s",
+                command_name, type(e).__name__, e,
+            )
+            return None
+
+        if not sink:
+            self.logger.warning(
+                "Scheduled {cmd:...} placeholder: %r produced no output", command_name
+            )
+            return None
+        return "\n".join(part for part in sink if part)
 
     async def execute_commands(self, message):
         """Execute command objects that handle their own responses.

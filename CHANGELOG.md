@@ -25,6 +25,13 @@ semantic versioning.
 
 - Migration 23: nullable `snr` / `rssi` columns on `observed_paths` for
   zero-hop advert rows.
+- `{cmd:<command> [args]}` placeholders in `[Scheduled_Messages]`: a scheduled message
+  can embed the reply of any bot command, so a recurring forecast is
+  `0 6,12,18 * * * = Public:{cmd:wx Seattle}` rather than a per-service schedule
+  setting. The command runs for its text only and transmits nothing itself
+  (`CommandManager.render_command_output`); unknown, disabled, admin-only, timing-out
+  and silent commands expand to nothing rather than airing raw placeholder text.
+  Bounded by the new `[Bot] scheduled_command_timeout_seconds` (default 30).
 - `{path_distance}` is now available in the path command's `[Path_Command] reply_prefix`,
   reporting total distance travelled (sender → hops → bot, e.g. `12.4km`) and rendering
   empty when any node in the chain has no usable coordinates. The prefix now supports the

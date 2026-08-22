@@ -207,6 +207,28 @@ Admins can DM **`channelpause`** or **`channelresume`** (see `[Admin_ACL]` in `c
 
 Each entry is `<schedule_key> = <value>` where the value is normally **`channel:message`** (first colon separates channel from body). For **regional flood scope** on that send only, use **`channel:#scope:message`**: the middle segment must start with `#` (same convention as `flood_scopes` / `outgoing_flood_scope_override`). The message body may contain more colons. Omit the middle field for classic global flood. See `config.ini.example` under `[Scheduled_Messages]` for examples. The **`schedule`** command lists each job with `(#scope)` when set.
 
+### Broadcasting a command's output (`{cmd:...}`)
+
+A scheduled message can embed the reply of any bot command with **`{cmd:<command> [args]}`**. The command runs for its text only — it transmits nothing itself — and the scheduled message carries the result. This is how you put a recurring forecast (or any other command) on the air without that command needing its own scheduling settings:
+
+```ini
+[Scheduled_Messages]
+0 6,12,18 * * * = Public:{cmd:wx Seattle}
+*/30 * * * *    = Public:Conditions now: {cmd:wx 98101}
+@hourly         = Public:{cmd:aqi Tacoma}
+```
+
+The trigger is matched against command **names and their keywords**, so `{cmd:weather Seattle}` and `{cmd:wx Seattle}` are the same command. Arguments are passed through exactly as a user would type them.
+
+A placeholder expands to **nothing** (and logs a warning) when the command is unknown, disabled in config, admin-only, times out, or returns no output — the literal `{cmd:...}` is never transmitted. If a message is empty after expansion, nothing is sent at all. Command output is not re-scanned, so a reply that happens to contain `{cmd:...}` cannot recurse.
+
+Two limits worth knowing:
+
+- Commands that transmit directly instead of returning text (currently only `announcements`) cannot be rendered and are refused, since running them would broadcast for real.
+- `[Bot] scheduled_command_timeout_seconds` (default `30`) bounds each render. Network-backed commands like `wx` need the headroom.
+
+**This costs airtime every time it fires.** A `*/5 * * * *` forecast is 288 transmissions a day; pick an interval the mesh can afford.
+
 ### Schedule keys (APScheduler cron, not Vixie)
 
 Schedule keys are parsed by **APScheduler** `CronTrigger.from_crontab` (plus `@` presets and deprecated `HHMM`). Field order is the usual five: `minute hour day-of-month month day-of-week`.

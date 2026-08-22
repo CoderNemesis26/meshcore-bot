@@ -36,6 +36,11 @@ class MeshMessage:
     # cleanup_message_for_matching from re-stripping/re-rejecting an already-normalized
     # message, which previously broke matching for all-but-the-first command.
     prefix_normalized: bool = False
+    # Transient: when not None, CommandManager.send_response appends the reply here
+    # and transmits nothing. Set by CommandManager.render_command_output so a command
+    # can be run for its text alone (e.g. a {cmd:...} placeholder in a scheduled
+    # message) without spending airtime. A synthetic message only.
+    capture_sink: Optional[list[str]] = None
 
     def effective_outgoing_flood_scope(self, bot: Any) -> str:
         """Resolve outbound flood scope the same way as ``CommandManager.send_channel_message``.

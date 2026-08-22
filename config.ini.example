@@ -153,6 +153,11 @@ rate_limit_seconds = 10
 # per-channel limits and bot_tx_rate_limit_seconds still apply.
 scheduled_message_max_stagger_seconds = 1.5
 
+# Seconds a {cmd:...} placeholder in a [Scheduled_Messages] entry may take to render
+# before it is abandoned and substituted with nothing. Commands that reach the network
+# (wx, aqi) need headroom; the scheduled send itself is still bounded by send_timeout_seconds.
+scheduled_command_timeout_seconds = 30
+
 # Bot transmission rate limit in seconds between bot messages
 # Prevents bot from overwhelming the mesh network
 bot_tx_rate_limit_seconds = 1.0
@@ -521,6 +526,29 @@ category.funfact = fun
 # Newlines: use \n in the message for a line break (e.g. general:Line one\nLine two).
 # Literal backslash: use \\n for backslash+n; \\t for tab.
 # 
+# Command output placeholder:
+#
+# {cmd:<command> [args]} runs a bot command and substitutes its reply text, so any
+# command can be broadcast on a schedule without that command needing its own
+# scheduling settings. The command runs for its text only and transmits nothing
+# itself; the scheduled message carries the result.
+#
+#   0 6,12,18 * * * = Public:{cmd:wx Seattle}
+#       Forecast for Seattle at 06:00, 12:00 and 18:00.
+#   */30 * * * *    = Public:Conditions: {cmd:wx 98101}
+#       Every 30 minutes, with surrounding text.
+#   @hourly         = Public:{cmd:aqi Tacoma}
+#
+# The command name is matched against command names and their keywords, so
+# {cmd:weather Seattle} and {cmd:wx Seattle} are equivalent. Arguments are passed
+# exactly as a user would type them after the keyword.
+#
+# A placeholder expands to nothing (and logs a warning) when the command is unknown,
+# disabled, admin-only, times out, or produces no output — the raw {cmd:...} text is
+# never put on the air. If expansion leaves the message empty, nothing is sent.
+# Command output is not re-scanned, so a reply containing {cmd:...} cannot recurse.
+# Mind the airtime: a scheduled command still costs a transmission every time it fires.
+#
 # Available placeholders for mesh network information:
 # 
 # Total counts (ever heard):

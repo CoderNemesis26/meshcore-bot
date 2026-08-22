@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import socket
 import sqlite3
 import threading
@@ -490,6 +491,50 @@ class MessageScheduler:
 
         return info
 
+    # {cmd:<command> [args]} — run a command and substitute its reply text.
+    # Non-greedy and brace-free inside, matching the placeholder limits elsewhere.
+    _COMMAND_PLACEHOLDER_RE = re.compile(r"\{cmd:([^{}]+)\}")
+
+    def _has_command_placeholders(self, message: str) -> bool:
+        return bool(self._COMMAND_PLACEHOLDER_RE.search(message))
+
+    async def _expand_command_placeholders(self, message: str, channel: str) -> str:
+        """Replace each {cmd:...} with the command's output.
+
+        A placeholder whose command is unknown, disabled, admin-only or failing
+        expands to an empty string rather than leaving the raw ``{cmd:...}`` text
+        on the air. Command output is never re-scanned, so a reply that happens to
+        contain ``{cmd:...}`` cannot cause recursion.
+        """
+        timeout = self.bot.config.getfloat(
+            'Bot', 'scheduled_command_timeout_seconds', fallback=30.0
+        )
+
+        out = []
+        last = 0
+        for match in self._COMMAND_PLACEHOLDER_RE.finditer(message):
+            out.append(message[last:match.start()])
+            spec = match.group(1).strip()
+            try:
+                rendered = await self.bot.command_manager.render_command_output(
+                    spec, channel=channel, timeout=timeout
+                )
+            except Exception as e:
+                self.logger.warning(
+                    "Error rendering scheduled command placeholder %r: %s", spec, e
+                )
+                rendered = None
+            if rendered:
+                self.logger.info("Scheduled message rendered {cmd:%s}", spec)
+            else:
+                self.logger.warning(
+                    "Scheduled message placeholder {cmd:%s} produced nothing; omitted", spec
+                )
+            out.append(rendered or "")
+            last = match.end()
+        out.append(message[last:])
+        return "".join(out)
+
     def _has_mesh_info_placeholders(self, message: str) -> bool:
         """Check if message contains mesh info placeholders"""
         placeholders = [
@@ -518,6 +563,17 @@ class MessageScheduler:
                 "Scheduled message stagger %.2fs (schedule_key=%r)", stagger, schedule_key
             )
             await asyncio.sleep(stagger)
+
+        # Command placeholders first: their output may itself contain mesh info
+        # placeholders, which the pass below then resolves.
+        if self._has_command_placeholders(message):
+            message = await self._expand_command_placeholders(message, channel)
+            if not message.strip():
+                self.logger.warning(
+                    "Scheduled message for %s is empty after expanding command "
+                    "placeholders; nothing sent", channel
+                )
+                return
 
         # Check if message contains mesh info placeholders
         if self._has_mesh_info_placeholders(message):
