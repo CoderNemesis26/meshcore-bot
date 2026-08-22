@@ -25,6 +25,10 @@ semantic versioning.
 
 - Migration 23: nullable `snr` / `rssi` columns on `observed_paths` for
   zero-hop advert rows.
+- `install-service.sh --install-extras` installs the optional profanity-filter and
+  geocoding packages without prompting, for unattended installs and upgrades. It
+  takes precedence over the in-place `--update-venv` path, so the two can be
+  combined.
 - `[PacketCapture] observer_name` — an optional name reported as the `origin` of
   MQTT packet and status payloads. It lets the observer/analyzer identity differ
   from the MeshCore RF node, which is useful when one bot name is already taken
