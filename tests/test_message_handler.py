@@ -676,6 +676,10 @@ class TestHandleChannelMessage:
         handler.bot.mesh_graph = None
         handler.recent_rf_data = []
         handler.enhanced_correlation = False
+        # No flood_scopes allowlist configured, which is the default. Left as a Mock
+        # this reads as truthy and these tests accidentally exercise the allowlist.
+        handler.bot.command_manager.flood_scope_keys = {}
+        handler.bot.command_manager.flood_scope_allow_global = False
 
     def _make_event(self, payload):
         event = Mock()
@@ -2281,3 +2285,33 @@ class TestAmbiguousPrefixIsNotAuthoritative:
         result = handler.find_recent_rf_data(exact)
         assert result[RF_MATCH_KEY] == RF_MATCH_EXACT
         assert rf_data_is_correlated(result) is True
+
+
+class TestGlobalFloodAuthorization:
+    """'*' in flood_scopes permits unscoped global traffic, not unknown scope, so it
+    needs positive evidence that this message's own packet was ordinary FLOOD."""
+
+    def test_correlated_plain_flood_is_confirmed(self, handler):
+        from modules.enums import RouteType
+
+        rf = {"route_type_int": RouteType.FLOOD.value, RF_MATCH_KEY: RF_MATCH_EXACT}
+        assert handler._is_confirmed_global_flood(rf) is True
+
+    def test_correlated_transport_flood_is_not_global(self, handler):
+        from modules.enums import RouteType
+
+        rf = {"route_type_int": RouteType.TRANSPORT_FLOOD.value, RF_MATCH_KEY: RF_MATCH_EXACT}
+        assert handler._is_confirmed_global_flood(rf) is False
+
+    def test_uncorrelated_flood_is_not_confirmed(self, handler):
+        """A fallback packet's route type says nothing about this message."""
+        from modules.enums import RouteType
+
+        rf = {"route_type_int": RouteType.FLOOD.value, RF_MATCH_KEY: RF_MATCH_FALLBACK}
+        assert handler._is_confirmed_global_flood(rf) is False
+
+    def test_absent_rf_data_is_not_confirmed(self, handler):
+        assert handler._is_confirmed_global_flood(None) is False
+
+    def test_missing_route_type_is_not_confirmed(self, handler):
+        assert handler._is_confirmed_global_flood({RF_MATCH_KEY: RF_MATCH_EXACT}) is False

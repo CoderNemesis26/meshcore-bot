@@ -235,6 +235,27 @@ class MessageHandler:
         """Payload type used for channel text on TC_FLOOD (GRP_TXT)."""
         return int(PayloadType.GRP_TXT.value)
 
+    def _is_confirmed_global_flood(
+        self,
+        rf_data: dict[str, Any] | None,
+        packet_info: dict[str, Any] | None = None,
+    ) -> bool:
+        """True only when this message's own packet is proven ordinary FLOOD.
+
+        Used to decide whether a '*' entry in flood_scopes authorises a reply. '*'
+        permits unscoped global traffic, so it needs positive evidence of
+        RouteType.FLOOD from RF data correlated to *this* message. Absent or
+        uncorrelated data means the scope is unknown, not global.
+        """
+        if not rf_data or not rf_data_is_correlated(rf_data):
+            return False
+
+        route_type = rf_data.get("route_type_int")
+        dec_rt, _tc, _pt, _hex = self._scope_fields_from_packet_info(packet_info)
+        if dec_rt is not None:
+            route_type = dec_rt
+        return route_type == RouteType.FLOOD.value
+
     def _is_rf_data_scope_eligible(
         self,
         rf_data: dict[str, Any] | None,
@@ -2386,17 +2407,18 @@ class MessageHandler:
                 ):
                     self.logger.info("Ignoring TC_FLOOD: scope not in flood_scopes allowlist")
                     return
-                # '*' permits *unscoped global* traffic, not traffic of unknown scope.
-                # If a scope-eligible packet was heard recently but could not be tied to
-                # this message, we have no evidence this message is global, so '*' must
-                # not admit it. No scope-eligible packet at all is different: nothing
-                # scoped was heard, which is what a genuinely global message looks like,
-                # so the operator's '*' still applies there.
-                if allow_global and scope_rf_data is not None and not scope_rf_is_correlated:
+                # '*' permits *unscoped global* traffic, not traffic of unknown scope,
+                # so it needs positive evidence that this message's own packet was
+                # ordinary FLOOD. The general RF correlation carries that evidence for
+                # the normal case; without it the scope is unknown and an allowlist
+                # should fail closed rather than assume global.
+                if allow_global and not self._is_confirmed_global_flood(
+                    recent_rf_data, packet_info
+                ):
                     self.logger.info(
-                        "Ignoring channel message: '*' allows global traffic, but a "
-                        "scope-eligible packet was heard that could not be correlated "
-                        "to this message, so its scope is unknown rather than global"
+                        "Ignoring channel message: flood_scopes lists '*', but this "
+                        "message's packet could not be confirmed as unscoped FLOOD "
+                        "(scope unknown, not global)"
                     )
                     return
 
