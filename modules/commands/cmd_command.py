@@ -97,6 +97,9 @@ class CmdCommand(BaseCommand):
         for cmd_name, cmd_instance in self.bot.command_manager.commands.items():
             # Skip system commands without keywords (like greeter)
             if hasattr(cmd_instance, 'keywords') and cmd_instance.keywords:
+                section_name = cmd_instance._derive_config_section_name()
+                if not cmd_instance.get_config_value(section_name, 'enabled', fallback=True, value_type='bool'):
+                    continue
                 if not self._is_command_valid_for_channel(cmd_name, cmd_instance, message):
                     continue
                 all_commands.append(cmd_name)

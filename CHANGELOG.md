@@ -18,6 +18,8 @@ semantic versioning.
   endpoint is `https://api.adsb.lol/v2/`; existing `api_url` values pointing
   at `api.airplanes.live` are remapped automatically. Local readsb URLs are
   unchanged.
+- `cmd` no longer lists commands that are disabled in `config.ini`. Commands
+  with no `[<Name>_Command]` section at all are still listed, as before.
 
 ### Added
 
