@@ -154,6 +154,13 @@ jwt_renewal_interval = 43200      # Default proactive refresh cadence (12 hours)
 # mqtt1_jwt_renewal_interval = 1800
 ```
 
+**Note**: When connecting to waev.app brokers the default settings will cause the connection not to authenticate properly. Please use the following settings on the MQTT connection for the waev.app brokers.
+
+```ini
+mqttN_jwt_ttl_seconds = 3600
+mqttN_jwt_renewal_interval = 3500
+```
+
 ---
 
 ## Packet Format
@@ -267,6 +274,8 @@ Common issues:
    ```
 3. **Check authentication** - Verify JWT token generation
 4. **Check logs** - Look for connection errors
+
+**Note**: If the MQTT connection that is failing is attempting to connect to waev.app brokers, please see the [Status Publishing and MQTT auth (JWT)](#status-publishing-and-mqtt-auth-jwt) section.
 
 ### No Packets Being Published
 
