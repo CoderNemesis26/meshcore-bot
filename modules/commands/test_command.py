@@ -109,7 +109,8 @@ class TestCommand(BaseCommand):
     def matches_keyword(self, message: MeshMessage) -> bool:
         """Override to implement special test keyword matching with optional phrase.
 
-        Matches 'test', 't', 'test <phrase>', or 't <phrase>'.
+        Matches 'test', 't', 'test <phrase>', or 't <phrase>', plus any
+        config ``aliases`` loaded into ``self.keywords``.
 
         Args:
             message: The message to check.
@@ -138,7 +139,8 @@ class TestCommand(BaseCommand):
             phrase = content[2:].strip()  # Get everything after "t " and strip whitespace
             return bool(phrase)  # Make sure there's actually a phrase
 
-        return False
+        # Config aliases (e.g. aliases = path, p) live in self.keywords via BaseCommand
+        return super().matches_keyword(message)
 
     DEFAULT_FORMAT = "ack @[{sender}]{phrase_part} | {connection_info} | Received at: {timestamp}"
 
