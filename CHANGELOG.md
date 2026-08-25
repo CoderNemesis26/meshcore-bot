@@ -8,6 +8,15 @@ semantic versioning.
 
 ### Fixed
 
+- Startup config-lint findings now go to the log file. They were printed to stderr
+  before the bot (and therefore its logger) existed, so under systemd they reached
+  only the journal and never `logs/meshcore_bot.log`. The linter had correctly
+  reported `[Test_Command] unknown key 'alias'. Did you mean 'aliases'?` on three
+  consecutive startups without that ever being visible to the operator reading logs.
+  Findings are still collected before anything opens the database, and stderr remains
+  the fallback when bot construction fails, which is when a config problem is the
+  likeliest cause.
+
 - `{hops}` and `{hops_label}` in a `[Keywords]` response now report the same hop count
   a command response would for the same packet. The keyword formatter carried its own
   implementation that consulted only `message.hops` and the path display string, so it
