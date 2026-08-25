@@ -8,6 +8,19 @@ semantic versioning.
 
 ### Fixed
 
+- `flood_scopes = *` no longer drops every channel message. Requiring RF data
+  correlated to the message before `*` could authorize a reply looked reasonable,
+  but MeshCore's CHAN payload carries neither `raw_hex` nor a pubkey prefix, so a
+  channel message has no correlation key at all and always lands on the
+  most-recent-packet fallback. The gate could therefore never pass: across three
+  log files every one of 45 received channel messages was rejected. `*` now also
+  accepts the window-wide absence of scope-eligible traffic as proof: a scoped
+  message travels as TRANSPORT_FLOOD GRP_TXT, so if the radio heard no such packet
+  while the message arrived, the message cannot have been scoped. Unlike a route
+  type read off a fallback row, that doesn't depend on having picked the right
+  cached packet, so genuinely ambiguous cases—a TC_FLOOD GRP_TXT heard alongside
+  the message—still fail closed.
+
 - The web viewer's radio **Disconnect** button is now **Stop Bot** and asks for
   confirmation first (#240). It never was a radio-only disconnect: the main loop runs
   while the bot is connected, so disconnecting ended the process, which surprised at

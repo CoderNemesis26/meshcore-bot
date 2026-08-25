@@ -2303,8 +2303,24 @@ class TestGlobalFloodAuthorization:
         rf = {"route_type_int": RouteType.TRANSPORT_FLOOD.value, RF_MATCH_KEY: RF_MATCH_EXACT}
         assert handler._is_confirmed_global_flood(rf) is False
 
-    def test_uncorrelated_flood_is_not_confirmed(self, handler):
+    def test_uncorrelated_flood_is_not_confirmed_while_scoped_traffic_is_present(self, handler):
         """A fallback packet's route type says nothing about this message."""
+        from modules.enums import RouteType
+
+        rf = {"route_type_int": RouteType.FLOOD.value, RF_MATCH_KEY: RF_MATCH_FALLBACK}
+        assert handler._is_confirmed_global_flood(rf, scoped_traffic_in_window=True) is False
+
+    def test_uncorrelated_is_confirmed_when_no_scoped_traffic_was_heard(self, handler):
+        """MeshCore's CHAN payload has no correlation key, so channel messages always
+        land on the fallback. When the RF window holds no TC_FLOOD GRP_TXT at all the
+        message cannot have been scoped, which is exactly what '*' asks about."""
+        from modules.enums import RouteType
+
+        rf = {"route_type_int": RouteType.FLOOD.value, RF_MATCH_KEY: RF_MATCH_FALLBACK}
+        assert handler._is_confirmed_global_flood(rf, scoped_traffic_in_window=False) is True
+
+    def test_uncorrelated_defaults_to_assuming_scoped_traffic(self, handler):
+        """Callers that cannot answer the question get the conservative answer."""
         from modules.enums import RouteType
 
         rf = {"route_type_int": RouteType.FLOOD.value, RF_MATCH_KEY: RF_MATCH_FALLBACK}
@@ -2312,6 +2328,15 @@ class TestGlobalFloodAuthorization:
 
     def test_absent_rf_data_is_not_confirmed(self, handler):
         assert handler._is_confirmed_global_flood(None) is False
+        assert handler._is_confirmed_global_flood(None, scoped_traffic_in_window=False) is False
 
     def test_missing_route_type_is_not_confirmed(self, handler):
         assert handler._is_confirmed_global_flood({RF_MATCH_KEY: RF_MATCH_EXACT}) is False
+
+    def test_correlated_transport_flood_stays_blocked_without_scoped_traffic(self, handler):
+        """A correlated row is authoritative, so an empty scope window must not
+        launder a message the radio positively identified as TRANSPORT_FLOOD."""
+        from modules.enums import RouteType
+
+        rf = {"route_type_int": RouteType.TRANSPORT_FLOOD.value, RF_MATCH_KEY: RF_MATCH_EXACT}
+        assert handler._is_confirmed_global_flood(rf, scoped_traffic_in_window=False) is False

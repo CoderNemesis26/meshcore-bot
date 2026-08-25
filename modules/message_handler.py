@@ -239,22 +239,44 @@ class MessageHandler:
         self,
         rf_data: dict[str, Any] | None,
         packet_info: dict[str, Any] | None = None,
+        *,
+        scoped_traffic_in_window: bool = True,
     ) -> bool:
-        """True only when this message's own packet is proven ordinary FLOOD.
+        """True only when this message is proven *not* to be a scoped regional flood.
 
-        Used to decide whether a '*' entry in flood_scopes authorises a reply. '*'
-        permits unscoped global traffic, so it needs positive evidence of
-        RouteType.FLOOD from RF data correlated to *this* message. Absent or
-        uncorrelated data means the scope is unknown, not global.
+        Used to decide whether a '*' entry in flood_scopes authorizes a reply. '*'
+        permits unscoped global traffic, so it needs positive evidence, and there
+        are two independent ways to get it:
+
+        * RF data correlated to *this* message showing RouteType.FLOOD.
+        * No scope-eligible packet anywhere in the RF window
+          (``scoped_traffic_in_window=False``). A scoped message travels as
+          TRANSPORT_FLOOD GRP_TXT, so if the radio heard no such packet while this
+          message arrived, the message cannot have been scoped. That conclusion is
+          window-wide, so unlike a route type read off a fallback row it does not
+          depend on having picked the right cached packet.
+
+        The second route is what makes '*' usable on a channel: MeshCore's CHAN
+        payload carries neither raw_hex nor a pubkey prefix, so a channel message
+        has no correlation key at all and always lands on the most-recent-packet
+        fallback. Requiring correlation alone rejected *every* channel message.
+
+        An empty RF window still fails closed: with no observed traffic there is
+        no evidence either way.
         """
-        if not rf_data or not rf_data_is_correlated(rf_data):
+        if not rf_data:
             return False
 
-        route_type = rf_data.get("route_type_int")
-        dec_rt, _tc, _pt, _hex = self._scope_fields_from_packet_info(packet_info)
-        if dec_rt is not None:
-            route_type = dec_rt
-        return route_type == RouteType.FLOOD.value
+        if rf_data_is_correlated(rf_data):
+            route_type = rf_data.get("route_type_int")
+            dec_rt, _tc, _pt, _hex = self._scope_fields_from_packet_info(packet_info)
+            if dec_rt is not None:
+                route_type = dec_rt
+            return route_type == RouteType.FLOOD.value
+
+        # Uncorrelated: this row describes some other packet, so its route type
+        # proves nothing about the message. Only the absence of scoped traffic does.
+        return not scoped_traffic_in_window
 
     def _is_rf_data_scope_eligible(
         self,
@@ -2416,12 +2438,14 @@ class MessageHandler:
                 # the normal case; without it the scope is unknown and an allowlist
                 # should fail closed rather than assume global.
                 if allow_global and not self._is_confirmed_global_flood(
-                    recent_rf_data, packet_info
+                    recent_rf_data,
+                    packet_info,
+                    scoped_traffic_in_window=scope_rf_data is not None,
                 ):
                     self.logger.info(
-                        "Ignoring channel message: flood_scopes lists '*', but this "
-                        "message's packet could not be confirmed as unscoped FLOOD "
-                        "(scope unknown, not global)"
+                        "Ignoring channel message: flood_scopes lists '*', but a scoped "
+                        "TC_FLOOD packet was heard alongside this message and it could "
+                        "not be confirmed as unscoped FLOOD (scope unknown, not global)"
                     )
                     return
 
