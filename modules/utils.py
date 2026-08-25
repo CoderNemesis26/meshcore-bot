@@ -2455,26 +2455,16 @@ def format_keyword_response_with_placeholders(
             replacements['timestamp'] = time_str
             replacements['packet_hash'] = get_packet_hash_placeholder(message)
 
-            # Total hops: use message.hops when set, else parse from path string (e.g. "01,5f (2 hops)")
-            hops_val = getattr(message, 'hops', None)
-            if hops_val is not None and isinstance(hops_val, int):
-                replacements['hops'] = str(hops_val)
-            else:
-                path_str = message.path or ""
-                hop_match = re.search(r'\((\d+)\s*hops?', path_str, re.IGNORECASE)
-                if hop_match:
-                    replacements['hops'] = hop_match.group(1)
-                elif re.search(r'\bdirect\b|\b0\s*hops?\b', path_str, re.IGNORECASE):
-                    replacements['hops'] = "0"
-                else:
-                    replacements['hops'] = "?"
-            # Pluralized label: "1 hop", "2 hops", or "?" when unknown
-            h = replacements['hops']
-            if h == "?":
+            # Shared with BaseCommand.get_hops_display_values and the hops_min filter, so
+            # a keyword response and a command response report the same hop count for the
+            # same packet. "?" only when the count cannot be determined at all.
+            hops_val = message_hop_count(message)
+            if hops_val is None:
+                replacements['hops'] = "?"
                 replacements['hops_label'] = "?"
             else:
-                n = int(h)
-                replacements['hops_label'] = "1 hop" if n == 1 else f"{n} hops"
+                replacements['hops'] = str(hops_val)
+                replacements['hops_label'] = "1 hop" if hops_val == 1 else f"{hops_val} hops"
         else:
             # No message - use defaults for message-based placeholders
             replacements['sender'] = "Unknown"

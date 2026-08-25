@@ -712,6 +712,54 @@ class TestFormatKeywordResponseWithPlaceholders:
             result = format_keyword_response_with_placeholders("{hops_label}", msg, bot)
         assert result == "3 hops"
 
+    def test_hops_prefers_routing_info_over_the_path_string(self):
+        """The keyword formatter used to parse only the path string, so it reported a
+        different hop count than the command formatter for the same packet."""
+        bot = self._bot()
+        msg = self._msg(hops=None, path="01 (1 hop)", routing_info={"path_length": 2})
+        with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+            result = format_keyword_response_with_placeholders("{hops}|{hops_label}", msg, bot)
+        assert result == "2|2 hops"
+
+    def test_hops_falls_back_to_counting_routing_path_nodes(self):
+        bot = self._bot()
+        msg = self._msg(hops=None, routing_info={"path_nodes": ["01", "02", "03"]})
+        with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+            result = format_keyword_response_with_placeholders("{hops}", msg, bot)
+        assert result == "3"
+
+    def test_hops_still_parses_the_path_string_without_routing_info(self):
+        bot = self._bot()
+        msg = self._msg(hops=None, path="01,5f (2 hops)")
+        with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+            result = format_keyword_response_with_placeholders("{hops}|{hops_label}", msg, bot)
+        assert result == "2|2 hops"
+
+    def test_hops_is_unknown_only_when_nothing_can_be_determined(self):
+        bot = self._bot()
+        msg = self._msg(hops=None, path=None, routing_info=None)
+        with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+            result = format_keyword_response_with_placeholders("{hops}|{hops_label}", msg, bot)
+        assert result == "?|?"
+
+    def test_hops_matches_the_command_formatter_for_the_same_message(self):
+        """One implementation, so a keyword reply and a command reply cannot disagree."""
+        from modules.commands.base_command import BaseCommand
+
+        bot = self._bot()
+        for kwargs in (
+            {"hops": 3},
+            {"hops": None, "routing_info": {"path_length": 2}},
+            {"hops": None, "path": "Direct"},
+            {"hops": None, "path": "01,5f (2 hops)"},
+            {"hops": None},
+        ):
+            msg = self._msg(**kwargs)
+            with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+                keyword_hops = format_keyword_response_with_placeholders("{hops}", msg, bot)
+            command_hops, _ = BaseCommand.get_hops_display_values(Mock(), msg)
+            assert keyword_hops == command_hops, kwargs
+
     def test_connection_info_contains_snr_rssi(self):
         bot = self._bot()
         msg = self._msg(snr=12, rssi=-75)

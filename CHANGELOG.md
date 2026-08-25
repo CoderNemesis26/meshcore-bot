@@ -8,6 +8,13 @@ semantic versioning.
 
 ### Fixed
 
+- `{hops}` and `{hops_label}` in a `[Keywords]` response now report the same hop count
+  a command response would for the same packet. The keyword formatter carried its own
+  implementation that consulted only `message.hops` and the path display string, so it
+  answered `?` whenever the count was known only from `routing_info`, and preferred a
+  stale path string over the packet's own `path_length` when both were present. All
+  three formatters now share `utils.message_hop_count`.
+
 - `pathbytes_min` no longer treats a direct message as a multi-byte path, so
   `{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }` stops printing
   `| Path Dist: N/A` on a hopless packet. `bytes_per_hop` describes how a path is
