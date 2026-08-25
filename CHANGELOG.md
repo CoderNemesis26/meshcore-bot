@@ -8,6 +8,14 @@ semantic versioning.
 
 ### Fixed
 
+- `pathbytes_min` no longer treats a direct message as a multi-byte path, so
+  `{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }` stops printing
+  `| Path Dist: N/A` on a hopless packet. `bytes_per_hop` describes how a path is
+  encoded, and a direct packet has no path for it to describe, so
+  `bytes_per_hop_from_routing_and_nodes` now returns 1 whenever the packet reports no
+  hops—which is what its docstring already claimed. The bug was latent until channel
+  messages started carrying routing info.
+
 - Channel messages are now tied to their own RF packet, so `{packet_hash}`, `{path}`
   and `{connection_info}` resolve on a channel instead of coming back empty or
   `Unknown`. MeshCore's CHAN event carries neither `raw_hex` nor a pubkey prefix, so

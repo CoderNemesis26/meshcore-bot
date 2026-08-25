@@ -23,6 +23,53 @@ def test_message_path_bytes_per_hop_from_routing():
 
 
 @pytest.mark.unit
+def test_hopless_packet_is_never_multibyte():
+    """bytes_per_hop describes how a path is encoded; a direct packet has no path for
+    it to describe, so pathbytes_min must not read the format field as a wide path."""
+    msg = MeshMessage(
+        content="test",
+        channel="c",
+        path="Direct",
+        routing_info={"bytes_per_hop": 2, "path_length": 0, "path_nodes": []},
+    )
+    assert message_path_bytes_per_hop(msg) == 1
+
+
+@pytest.mark.unit
+def test_pathbytes_min_hides_label_on_a_direct_message():
+    """A direct message has no path distance, so the whole clause must disappear
+    rather than render "Path Dist: N/A"."""
+    msg = MeshMessage(
+        content="test",
+        channel="c",
+        path="Direct",
+        routing_info={"bytes_per_hop": 2, "path_length": 0, "path_nodes": []},
+    )
+    out = format_piped_template(
+        "ack{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }",
+        {"path_distance": "N/A"},
+        message=msg,
+    )
+    assert out == "ack"
+
+
+@pytest.mark.unit
+def test_pathbytes_min_still_passes_a_real_multibyte_path():
+    msg = MeshMessage(
+        content="test",
+        channel="c",
+        path="7a2a,0102 (2 hops)",
+        routing_info={"bytes_per_hop": 2, "path_length": 2, "path_nodes": ["7A2A", "0102"]},
+    )
+    out = format_piped_template(
+        "ack{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }",
+        {"path_distance": "12.4km"},
+        message=msg,
+    )
+    assert out == "ack | Path Dist: 12.4km"
+
+
+@pytest.mark.unit
 def test_message_path_bytes_per_hop_infers_from_nodes():
     msg = MeshMessage(
         content="test",

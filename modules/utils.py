@@ -1892,10 +1892,20 @@ def bytes_per_hop_from_routing_and_nodes(
 ) -> int:
     """Bytes per hop from packet routing metadata, else inferred from hex node width.
 
-    When ``routing_info`` includes ``bytes_per_hop`` in 1..3, that value wins.
-    Otherwise uses minimum half-byte width among ``node_ids`` (comma or path_nodes).
-    Returns ``1`` when no nodes (direct / unknown).
+    When the packet carries a path and ``routing_info`` includes ``bytes_per_hop``
+    in 1..3, that value wins. Otherwise uses minimum half-byte width among
+    ``node_ids`` (comma or path_nodes). Returns ``1`` when no nodes (direct /
+    unknown).
+
+    A hopless packet always reports ``1``, whatever ``bytes_per_hop`` says.
+    ``bytes_per_hop`` describes how a path is *encoded*, and a direct packet has no
+    path for it to describe, so letting the format field through would make
+    ``pathbytes_min:2`` treat "Direct" as a multi-byte path and print a label for a
+    distance that does not exist.
     """
+    path_length = (routing_info or {}).get('path_length')
+    if not node_ids and not path_length:
+        return 1
     if routing_info:
         bph = routing_info.get('bytes_per_hop')
         if isinstance(bph, int) and 1 <= bph <= 3:
@@ -1912,8 +1922,8 @@ def message_path_bytes_per_hop(message: Any, *, prefix_hex_chars: int = 2) -> in
     :func:`extract_path_node_ids_from_message`, then comma/continuous hex via
     :func:`node_ids_from_path_string` using ``prefix_hex_chars`` for legacy paths.
 
-    Returns ``1`` when no usable path (direct / unparseable) so conservative gates
-    (e.g. ``pathbytes_min:2``) do not treat unknown as multibyte.
+    Returns ``1`` when there is no usable path (direct / unparseable) so conservative
+    gates (e.g. ``pathbytes_min:2``) treat neither unknown nor hopless as multibyte.
     """
     routing_info = getattr(message, 'routing_info', None)
     node_ids = extract_path_node_ids_from_message(message)
