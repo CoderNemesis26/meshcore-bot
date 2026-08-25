@@ -40,6 +40,16 @@ def test_format_piped_template_plain_field():
 
 
 @pytest.mark.unit
+def test_format_piped_template_drops_label_for_empty_field():
+    out = format_piped_template(
+        "hash={packet_hash|prefix_if_nonempty:id:}.",
+        {"packet_hash": ""},
+        message=None,
+    )
+    assert out == "hash=."
+
+
+@pytest.mark.unit
 def test_pathbytes_min_clears_when_below_threshold():
     msg = MeshMessage(
         content="test",
@@ -143,3 +153,69 @@ def test_test_command_response_expands_rssi_placeholder():
     out = cmd.format_response(msg, "RSSI: {rssi} | SNR: {snr} | Dist: {firstlast_distance}")
 
     assert out == "RSSI: -91 | SNR: 12.25 | Dist: N/A"
+
+
+@pytest.mark.unit
+def test_test_command_response_expands_packet_hash_placeholder():
+    bot = MagicMock()
+    bot.logger = Mock()
+    bot.config = configparser.ConfigParser()
+    bot.config.add_section("Bot")
+    bot.config.set("Bot", "bot_name", "TestBot")
+    bot.config.add_section("Channels")
+    bot.config.set("Channels", "monitor_channels", "general")
+    bot.config.set("Channels", "respond_to_dms", "true")
+    bot.config.add_section("Test_Command")
+    bot.config.set("Test_Command", "enabled", "true")
+    bot.config.add_section("Path_Command")
+    bot.config.set("Path_Command", "recency_weight", "0.2")
+    bot.translator = MagicMock()
+    bot.translator.translate = Mock(side_effect=lambda key, **kwargs: key)
+    bot.prefix_hex_chars = 2
+
+    cmd = MeshTestCommand(bot)
+    msg = MeshMessage(
+        content="test",
+        sender_id="Alice",
+        path="Direct (0 hops)",
+        hops=0,
+        snr=12.25,
+        rssi=-91,
+        routing_info={"path_length": 0, "packet_hash": "ABCDEF0123456789"},
+    )
+
+    out = cmd.format_response(msg, "hash={packet_hash}")
+
+    assert out == "hash=ABCDEF0123456789"
+
+
+@pytest.mark.unit
+def test_test_command_response_omits_missing_packet_hash():
+    bot = MagicMock()
+    bot.logger = Mock()
+    bot.config = configparser.ConfigParser()
+    bot.config.add_section("Bot")
+    bot.config.set("Bot", "bot_name", "TestBot")
+    bot.config.add_section("Channels")
+    bot.config.set("Channels", "monitor_channels", "general")
+    bot.config.set("Channels", "respond_to_dms", "true")
+    bot.config.add_section("Test_Command")
+    bot.config.set("Test_Command", "enabled", "true")
+    bot.config.add_section("Path_Command")
+    bot.config.set("Path_Command", "recency_weight", "0.2")
+    bot.translator = MagicMock()
+    bot.translator.translate = Mock(side_effect=lambda key, **kwargs: key)
+    bot.prefix_hex_chars = 2
+
+    cmd = MeshTestCommand(bot)
+    msg = MeshMessage(
+        content="test",
+        sender_id="Alice",
+        path="Direct (0 hops)",
+        hops=0,
+        routing_info={"path_length": 0},
+    )
+
+    out = cmd.format_response(msg, "hash={packet_hash|prefix_if_nonempty:id:}.")
+
+    assert out == "hash=."

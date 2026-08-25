@@ -21,7 +21,7 @@ from ..command_prefix import (
 from ..config_schema import LEGACY_ENABLED_ALIASES
 from ..models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD, MeshMessage
 from ..security_utils import validate_pubkey_format
-from ..utils import format_elapsed_display, get_config_timezone
+from ..utils import format_elapsed_display, get_config_timezone, get_packet_hash_placeholder
 
 # Task-local override for the active translator.  When set (via
 # ``BaseCommand.respond_in_sender_language``), ``translate`` / ``translate_get_value``
@@ -1263,6 +1263,7 @@ class BaseCommand(ABC):
             'timestamp': self.format_timestamp(message),
             'snr': message.snr or "Unknown",
             'rssi': message.rssi or "Unknown",
+            'packet_hash': get_packet_hash_placeholder(message),
         }
 
     def format_response(self, message: MeshMessage, response_format: str,

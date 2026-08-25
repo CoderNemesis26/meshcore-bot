@@ -351,7 +351,7 @@ radio_offline_alert_email =          # alert recipient(s); falls back to nightly
 [Keywords]
 # Format: keyword = response_template
 # Variables: {sender}, {connection_info}, {snr}, {rssi}, {timestamp}, {path},
-#            {hops}, {hops_label}, {elapsed}, {path_distance}, {firstlast_distance},
+#            {hops}, {hops_label}, {elapsed}, {packet_hash}, {path_distance}, {firstlast_distance},
 #            {total_contacts}, {total_repeaters}, {total_companions}, ...
 test = "Message received from {sender} | {connection_info}"
 help = "Bot Help: test, ping, help, hello, cmd, wx, aqi, sun, moon, solar, hfcond, satpass, dice, roll, joke, dadjoke, sports, channels, path, prefix, repeater, stats, alert"
@@ -525,6 +525,7 @@ Keyword responses support these template variables:
 - `{path}` - Message routing path
 - `{hops}` - Hop count (integer or `?`)
 - `{hops_label}` - Hop count with label (`"1 hop"`, `"3 hops"`, `"?"`)
+- `{packet_hash}` - 16-char MeshCore packet identity hash (uppercase hex); empty when RF correlation did not attach routing info
 - `{path_distance}` - Estimated total path distance in km
 - `{firstlast_distance}` - First-to-last repeater distance in km
 - `{total_contacts}`, `{total_repeaters}`, `{total_companions}` - Mesh network counts (for scheduled messages)

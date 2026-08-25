@@ -82,6 +82,13 @@ semantic versioning.
 
 ### Added
 
+- `{packet_hash}` placeholder for `[Keywords]` responses, the test command's
+  `response_format` and the path command's `reply_prefix`: the 16-char MeshCore
+  packet identity hash (uppercase hex) of the packet that carried the request, so a
+  reply can be tied back to a specific transmission when comparing paths. It comes
+  only from the routing info of an RF packet actually correlated to the message, and
+  renders empty otherwise, so a hash from an unrelated transmission is never shown.
+
 - **Scheduled messages can be managed from the web viewer** (#174). A new Schedule page
   lists every `[Scheduled_Messages]` entry with its next run time and offers add, edit
   and delete. Changes are written to `config.ini` and applied by a queued config reload,

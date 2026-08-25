@@ -84,7 +84,7 @@ def _field_and_filter_specs(inner: str) -> tuple[str, list[tuple[str, str]]]:
 
 def format_piped_template(
     template: str,
-    fields: dict[str, str],
+    fields: dict[str, Any],
     *,
     message: Any = None,
     logger: Any = None,
@@ -94,7 +94,9 @@ def format_piped_template(
 
     Args:
         template: Raw template string from config.
-        fields: Mapping of placeholder names to string values (e.g. ``sender``, ``path_distance``).
+        fields: Mapping of placeholder names to values (e.g. ``sender``, ``path_distance``).
+            An unavailable field is an empty string, which renders as nothing and
+            lets ``prefix_if_nonempty`` drop its literal label too.
         message: Triggering mesh message; required for ``pathbytes`` / ``pathbytes_min`` filters.
         logger: Optional logger for unknown filter warnings.
         prefix_hex_chars: Bot prefix width for inferring bytes per hop from legacy path text.

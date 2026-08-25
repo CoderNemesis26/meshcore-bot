@@ -655,45 +655,20 @@ class TestCommand(BaseCommand):
         phrase = args if trigger is not None else ""
 
         try:
-            connection_info = self.build_enhanced_connection_info(message)
-            timestamp = self.format_timestamp(message)
-            elapsed = self.format_elapsed(message)
-            path_display = self.get_path_display_string(message)
-            # Hops: from message.hops, or routing_info.path_length, or len(path_nodes)
-            routing_info = getattr(message, 'routing_info', None)
-            if getattr(message, 'hops', None) is not None:
-                hops_val = message.hops
-            elif routing_info is not None:
-                hops_val = routing_info.get('path_length')
-                if hops_val is None and routing_info.get('path_nodes'):
-                    hops_val = len(routing_info['path_nodes'])
-            else:
-                hops_val = None
-            hops_str = str(hops_val) if hops_val is not None else "?"
-            if hops_val is None:
-                hops_label = "?"
-            elif hops_val == 1:
-                hops_label = "1 hop"
-            else:
-                hops_label = f"{hops_val} hops"
-            path_distance = self._calculate_path_distance(message)
-            firstlast_distance = self._calculate_firstlast_distance(message)
+            fields = self.get_standard_placeholder_fields(message)
             phrase_part = f": {phrase}" if phrase else ""
-            fields = {
+            fields.update({
                 'sender': message.sender_id or self.translate('common.unknown_sender'),
                 'phrase': phrase,
                 'phrase_part': phrase_part,
-                'connection_info': connection_info,
-                'path': path_display,
-                'hops': hops_str,
-                'hops_label': hops_label,
-                'timestamp': timestamp,
-                'elapsed': elapsed,
+                'elapsed': self.format_elapsed(message),
                 'snr': str(message.snr) if message.snr is not None else self.translate('common.unknown'),
                 'rssi': str(message.rssi) if message.rssi is not None else self.translate('common.unknown'),
-                'path_distance': path_distance or '',
-                'firstlast_distance': firstlast_distance or '',
-            }
+                'path_distance': self._calculate_path_distance(message) or '',
+                'firstlast_distance': self._calculate_firstlast_distance(message) or '',
+            })
+            if extra:
+                fields.update(extra)
             return format_piped_template(
                 response_format,
                 fields,

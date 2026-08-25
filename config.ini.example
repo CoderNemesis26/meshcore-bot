@@ -416,6 +416,7 @@ companion_min_inactive_days = 30
 # {path_distance} - Total distance between all hops in path with locations (e.g., "123.4km (3 segs, 1 no-loc)")
 # {firstlast_distance} - Distance between first and last repeater in path (e.g., "45.6km" or empty if locations missing)
 # {elapsed} - Elapsed time (e.g. 1234ms) or "Sync Device Clock" when device clock is invalid (use {elapsed} only; do not append ms)
+# {packet_hash} - 16-char MeshCore packet identity hash (uppercase hex); renders empty when RF correlation did not attach routing info
 #
 # To add newlines in responses, use \n (single backslash + n):
 # Example: test = "Line 1\nLine 2\nLine 3"
@@ -1032,7 +1033,7 @@ enable_p_shortcut = true
 
 # Optional first line prepended to path command RF replies.
 # Placeholders match keyword-style responses: {sender}, {connection_info}, {path},
-# {hops}, {hops_label}, {timestamp}, {snr}, {rssi}, plus {path_distance}.
+# {hops}, {hops_label}, {timestamp}, {snr}, {rssi}, {packet_hash}, plus {path_distance}.
 # {path_distance} is the total distance travelled (sender -> hops -> bot), e.g. "12.4km".
 # It renders empty unless every node in the chain has known coordinates and the bot has
 # bot_latitude/bot_longitude set, so a partial sum is never mistaken for the full distance.
@@ -1551,7 +1552,7 @@ require_path_bytes_failure_response =
 
 # Optional: full ack template for test/t. When set, overrides [Keywords] test for this command only.
 # Same placeholders as Keywords (sender, phrase, phrase_part, connection_info, path, hops, hops_label,
-# timestamp, elapsed, snr, rssi, path_distance, firstlast_distance).
+# timestamp, elapsed, snr, rssi, packet_hash, path_distance, firstlast_distance).
 # {firstlast_distance} requires at least two path nodes with stored repeater/roomserver coordinates.
 # Pipe filters (feed-style), e.g. only show cumulative path distance when hops are multibyte (2+ bytes per hop):
 # response_format = ack @[{sender}]{phrase_part} | {connection_info}{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }| F/L Dist: {firstlast_distance} | {elapsed} | Rec: {timestamp}

@@ -21,6 +21,7 @@ from modules.utils import (
     format_location_for_display,
     get_config_timezone,
     get_major_city_queries,
+    get_packet_hash_placeholder,
     is_valid_timezone,
     node_ids_from_path_string,
     parse_location_string,
@@ -669,6 +670,7 @@ class TestFormatKeywordResponseWithPlaceholders:
         msg.rssi = kwargs.get("rssi", -80)
         msg.timestamp = kwargs.get("timestamp")
         msg.hops = kwargs.get("hops")
+        msg.routing_info = kwargs.get("routing_info")
         return msg
 
     def test_sender_placeholder(self):
@@ -716,6 +718,64 @@ class TestFormatKeywordResponseWithPlaceholders:
             result = format_keyword_response_with_placeholders("{connection_info}", msg, bot)
         assert "SNR" in result
         assert "RSSI" in result
+
+    def test_packet_hash_from_routing_info(self):
+        bot = self._bot()
+        msg = self._msg(routing_info={"packet_hash": "ABCDEF0123456789"})
+        with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+            result = format_keyword_response_with_placeholders("{packet_hash}", msg, bot)
+        assert result == "ABCDEF0123456789"
+
+    def test_packet_hash_omitted_when_missing(self):
+        bot = self._bot()
+        msg = self._msg()
+        with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+            result = format_keyword_response_with_placeholders("hash={packet_hash}.", msg, bot)
+        assert result == "hash=."
+
+    def test_packet_hash_omitted_for_zero_hash(self):
+        bot = self._bot()
+        msg = self._msg(routing_info={"packet_hash": "0000000000000000"})
+        with patch("modules.utils.calculate_path_distances", return_value=("", "")):
+            result = format_keyword_response_with_placeholders("hash={packet_hash}.", msg, bot)
+        assert result == "hash=."
+
+    def test_packet_hash_omitted_when_no_message(self):
+        bot = self._bot()
+        result = format_keyword_response_with_placeholders("hash={packet_hash}.", None, bot)
+        assert result == "hash=."
+
+
+class TestGetPacketHashPlaceholder:
+    """Tests for get_packet_hash_placeholder()."""
+
+    def test_returns_hash_from_routing_info(self):
+        msg = Mock()
+        msg.routing_info = {"packet_hash": "DEADBEEFCAFEBABE"}
+        assert get_packet_hash_placeholder(msg) == "DEADBEEFCAFEBABE"
+
+    def test_empty_when_message_is_none(self):
+        assert get_packet_hash_placeholder(None) == ""
+
+    def test_empty_when_routing_info_missing(self):
+        msg = Mock(spec=[])
+        assert get_packet_hash_placeholder(msg) == ""
+
+    def test_empty_when_routing_info_is_not_a_dict(self):
+        msg = Mock()
+        msg.routing_info = "01,5f (2 hops)"
+        assert get_packet_hash_placeholder(msg) == ""
+
+    def test_empty_when_hash_is_zero_sentinel(self):
+        msg = Mock()
+        msg.routing_info = {"packet_hash": "0000000000000000"}
+        assert get_packet_hash_placeholder(msg) == ""
+
+    def test_empty_when_hash_is_empty_string(self):
+        msg = Mock()
+        msg.routing_info = {"packet_hash": ""}
+        assert get_packet_hash_placeholder(msg) == ""
+
 
 class TestVerifyMeshcoreAdvertEd25519:
     """Tests for verify_meshcore_advert_ed25519() matching MeshCore createAdvert signing."""

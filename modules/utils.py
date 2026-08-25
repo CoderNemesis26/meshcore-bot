@@ -594,6 +594,25 @@ def calculate_packet_hash(raw_hex: str, payload_type: Optional[int] = None) -> s
         return "0000000000000000"
 
 
+def get_packet_hash_placeholder(message: Any) -> str:
+    """Return the correlated MeshCore packet hash for template placeholders.
+
+    Reads only ``message.routing_info["packet_hash"]`` so an uncorrelated RF
+    cache entry cannot leak another packet's identity. Missing, empty, and the
+    error sentinel ``0000000000000000`` return ``""`` so the placeholder renders
+    empty (and piped templates can hide a label with ``prefix_if_nonempty``).
+    """
+    if message is None:
+        return ""
+    routing_info = getattr(message, "routing_info", None)
+    if not isinstance(routing_info, dict):
+        return ""
+    packet_hash = routing_info.get("packet_hash")
+    if not packet_hash or packet_hash == "0000000000000000":
+        return ""
+    return str(packet_hash)
+
+
 def verify_meshcore_advert_ed25519(mesh_payload: bytes) -> bool:
     """Verify MeshCore ADVERT Ed25519 signature (layout from ``Mesh::createAdvert``).
 
@@ -2395,6 +2414,7 @@ def format_keyword_response_with_placeholders(
                 time_str = "Unknown"
 
             replacements['timestamp'] = time_str
+            replacements['packet_hash'] = get_packet_hash_placeholder(message)
 
             # Total hops: use message.hops when set, else parse from path string (e.g. "01,5f (2 hops)")
             hops_val = getattr(message, 'hops', None)
@@ -2427,6 +2447,7 @@ def format_keyword_response_with_placeholders(
             replacements['path_distance'] = ""
             replacements['firstlast_distance'] = ""
             replacements['timestamp'] = "Unknown"
+            replacements['packet_hash'] = ""
             replacements['hops'] = "?"
             replacements['hops_label'] = "?"
 
