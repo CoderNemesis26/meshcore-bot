@@ -954,6 +954,36 @@ class BaseCommand(ABC):
         message.content_lower = content.lower()
         return message.content_lower
 
+    def split_trigger_and_args(self, content: str) -> tuple[Optional[str], str]:
+        """Split message content into ``(matched_keyword, args)``.
+
+        Matches against ``self.keywords`` (built-in stems plus config ``aliases``),
+        preferring the longest keyword so multi-word triggers win. Leading ``!``
+        is stripped for execute paths that still see raw command-style text.
+
+        Args:
+            content: Raw or partially cleaned message text.
+
+        Returns:
+            ``(keyword, args)`` when a keyword matches as the first token(s);
+            ``(None, content)`` (after optional ``!`` strip) otherwise.
+        """
+        text = content.strip()
+        if text.startswith('!'):
+            text = text[1:].strip()
+        lower = text.lower()
+        if not lower or not self.keywords:
+            return None, text
+
+        # Longest first so "dad joke" wins over a hypothetical shorter stem
+        for keyword in sorted(self.keywords, key=lambda k: len(k), reverse=True):
+            kw = keyword.lower()
+            if lower == kw:
+                return kw, ""
+            if lower.startswith(kw + " "):
+                return kw, text[len(kw):].strip()
+        return None, text
+
     def matches_keyword(self, message: MeshMessage) -> bool:
         """Check if this command matches the message content based on keywords.
 
