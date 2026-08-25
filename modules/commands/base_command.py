@@ -958,30 +958,43 @@ class BaseCommand(ABC):
         """Split message content into ``(matched_keyword, args)``.
 
         Matches against ``self.keywords`` (built-in stems plus config ``aliases``),
-        preferring the longest keyword so multi-word triggers win. Leading ``!``
-        is stripped for execute paths that still see raw command-style text.
+        preferring the longest keyword so multi-word triggers win. The configured
+        command prefix is stripped for execute paths that still see raw
+        command-style text.
 
         Args:
             content: Raw or partially cleaned message text.
 
         Returns:
             ``(keyword, args)`` when a keyword matches as the first token(s);
-            ``(None, content)`` (after optional ``!`` strip) otherwise.
+            ``(None, content)`` (after prefix stripping) otherwise.
         """
         text = content.strip()
-        if text.startswith('!'):
+        # Strip the configured prefix; bare "!" only in legacy no-prefix mode, so a
+        # bot configured with command_prefix = / does not silently accept "!test".
+        matched = find_matching_prefix(text, self._command_prefixes)
+        if matched is not None:
+            text = text[len(matched):].strip()
+        elif not self._command_prefixes and text.startswith('!'):
             text = text[1:].strip()
-        lower = text.lower()
-        if not lower or not self.keywords:
+        if not text or not self.keywords:
             return None, text
 
-        # Longest first so "dad joke" wins over a hypothetical shorter stem
-        for keyword in sorted(self.keywords, key=lambda k: len(k), reverse=True):
-            kw = keyword.lower()
-            if lower == kw:
-                return kw, ""
-            if lower.startswith(kw + " "):
-                return kw, text[len(kw):].strip()
+        # Longest first (word count, then length) so "dad joke" wins over a shorter
+        # stem. Compare word by word rather than slicing the lowered copy by keyword
+        # length: str.lower() can change length for non-ASCII aliases, which would
+        # misalign the offset and cut the args in the wrong place.
+        for keyword in sorted(self.keywords, key=lambda k: (len(k.split()), len(k)), reverse=True):
+            kw_words = keyword.lower().split()
+            if not kw_words:
+                continue
+            parts = text.split(maxsplit=len(kw_words))
+            if len(parts) < len(kw_words):
+                continue
+            if [part.lower() for part in parts[:len(kw_words)]] != kw_words:
+                continue
+            args = parts[len(kw_words)].strip() if len(parts) > len(kw_words) else ""
+            return keyword.lower(), args
         return None, text
 
     def matches_keyword(self, message: MeshMessage) -> bool:

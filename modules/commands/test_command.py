@@ -107,40 +107,30 @@ class TestCommand(BaseCommand):
         return cleaned
 
     def matches_keyword(self, message: MeshMessage) -> bool:
-        """Override to implement special test keyword matching with optional phrase.
+        """Match 'test'/'t' and any config ``aliases`` over control-cleaned content.
 
-        Matches 'test', 't', 'test <phrase>', or 't <phrase>', plus any
-        config ``aliases`` loaded into ``self.keywords``.
+        Mesh clients occasionally embed stray control bytes in message text, and a
+        test is exactly the message someone sends when their link is marginal, so
+        the cleaned text is what gets matched. Keyword and alias matching itself is
+        inherited from :class:`BaseCommand`.
+
+        The cleaned text only sticks when this command claims the message. Matching
+        runs against the shared message object early in the command scan, and
+        collapsing whitespace on someone else's free-form argument (a scheduled
+        message body, say) is not this command's business.
 
         Args:
             message: The message to check.
 
         Returns:
-            bool: True if the message matches the keyword patterns.
+            bool: True if the message matches a test keyword or configured alias.
         """
-        # Clean content to remove control characters and normalize whitespace
-        content = self.clean_content(message.content)
-
-        # Strip exclamation mark if present (for command-style messages)
-        if content.startswith('!'):
-            content = content[1:].strip()
-
-        # Handle "test" alone or "test " with phrase
-        if content.lower() == "test":
-            return True  # Just "test" by itself
-        elif (content.startswith('test ') or content.startswith('Test ')) and len(content) > 5:
-            phrase = content[5:].strip()  # Get everything after "test " and strip whitespace
-            return bool(phrase)  # Make sure there's actually a phrase
-
-        # Handle "t" alone or "t " with phrase
-        elif content.lower() == "t":
-            return True  # Just "t" by itself
-        elif (content.startswith('t ') or content.startswith('T ')) and len(content) > 2:
-            phrase = content[2:].strip()  # Get everything after "t " and strip whitespace
-            return bool(phrase)  # Make sure there's actually a phrase
-
-        # Config aliases (e.g. aliases = path, p) live in self.keywords via BaseCommand
-        return super().matches_keyword(message)
+        original = message.content
+        message.content = self.clean_content(original)
+        if super().matches_keyword(message):
+            return True
+        message.content = original
+        return False
 
     DEFAULT_FORMAT = "ack @[{sender}]{phrase_part} | {connection_info} | Received at: {timestamp}"
 
@@ -658,22 +648,11 @@ class TestCommand(BaseCommand):
         Returns:
             str: Formatted response string.
         """
-        # Clean content to remove control characters and normalize whitespace
         content = self.clean_content(message.content)
-
-        # Strip exclamation mark if present (for command-style messages)
-        if content.startswith('!'):
-            content = content[1:].strip()
-
-        # Extract phrase if present, otherwise use empty string
-        if content.lower() == "test" or content.lower() == "t":
-            phrase = ""
-        elif content.startswith('test ') or content.startswith('Test '):
-            phrase = content[5:].strip()  # Get everything after "test "
-        elif content.startswith('t ') or content.startswith('T '):
-            phrase = content[2:].strip()  # Get everything after "t "
-        else:
-            phrase = ""
+        trigger, args = self.split_trigger_and_args(content)
+        # Phrase is whatever follows the matched stem (test, t, or a config alias),
+        # so an alias carries a phrase the same way the built-in stems do.
+        phrase = args if trigger is not None else ""
 
         try:
             connection_info = self.build_enhanced_connection_info(message)
