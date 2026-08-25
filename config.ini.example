@@ -1038,7 +1038,8 @@ enable_p_shortcut = true
 # It renders empty unless every node in the chain has known coordinates and the bot has
 # bot_latitude/bot_longitude set, so a partial sum is never mistaken for the full distance.
 # Feed-style pipe filters are supported (same engine as [Test_Command] response_format),
-# so a label can disappear along with an empty value.
+# so a label can disappear along with an empty value. hops_min:1 drops a clause on a
+# direct message, where {path_distance} would otherwise render "N/A".
 # Only the first RF chunk includes the prefix when the reply is split.
 # Example: @[{sender}]
 # Example: {path_distance|prefix_if_nonempty:\U0001F4CF }
@@ -1556,7 +1557,12 @@ require_path_bytes_failure_response =
 # {firstlast_distance} requires at least two path nodes with stored repeater/roomserver coordinates.
 # Pipe filters (feed-style), e.g. only show cumulative path distance when hops are multibyte (2+ bytes per hop):
 # response_format = ack @[{sender}]{phrase_part} | {connection_info}{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }| F/L Dist: {firstlast_distance} | {elapsed} | Rec: {timestamp}
-# Filters: pathbytes_min:N (alias pathbytes:N) clears the field unless bytes_per_hop >= N; prefix_if_nonempty:L prepends literal L when value non-empty after prior filters. If L contains |, put prefix_if_nonempty last in that placeholder (it consumes the rest of the chain as its literal).
+# Filters: pathbytes_min:N (alias pathbytes:N) clears the field unless bytes_per_hop >= N; hops_min:N clears it unless the message travelled at least N hops; prefix_if_nonempty:L prepends literal L when value non-empty after prior filters. If L contains |, put prefix_if_nonempty last in that placeholder (it consumes the rest of the chain as its literal).
+# hops_min asks about the route, pathbytes_min about how it is encoded. Use hops_min:1 to drop a
+# distance clause on a direct message without also dropping a measurable one-byte multi-hop path.
+# The distance placeholders render "N/A" on a direct message, which is non-empty, so
+# prefix_if_nonempty alone will still print its label there -- gate with hops_min:1 first:
+# response_format = ack @[{sender}]{phrase_part} | {path}{firstlast_distance|hops_min:1|prefix_if_nonempty: | F/L Dist: }{packet_hash|prefix_if_nonempty: | Hash: }
 # channels =
 [Trace_Command]
 # Enable or disable the trace/tracer commands (link diagnostics)

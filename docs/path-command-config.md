@@ -26,6 +26,7 @@ These options only affect the **path** command’s reply text and whether repeat
 ```ini
 reply_prefix = "{path_distance|prefix_if_nonempty:📏 }\n"
 ```
+- `hops_min:N` clears a field unless the message actually travelled at least N hops. `{path_distance}` renders `N/A` on a direct message, which `prefix_if_nonempty` treats as a value, so gate it first: `{path_distance|hops_min:1|prefix_if_nonempty:📏 }`. Unlike `pathbytes_min:N`, which asks how the path is *encoded*, this keeps a measurable one-byte multi-hop path.
 
 **`minimum_path_bytes`** (integer `0`–`3`, default `0`)
 

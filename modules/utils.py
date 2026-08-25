@@ -1915,6 +1915,35 @@ def bytes_per_hop_from_routing_and_nodes(
     return 1
 
 
+def message_hop_count(message: Any) -> Optional[int]:
+    """Hop count for the message, or ``None`` when it cannot be determined.
+
+    Prefers ``message.hops``, then ``routing_info`` (``path_length``, else the
+    number of ``path_nodes``), then a count parsed from the path display string
+    (``"01,5f (2 hops)"``; ``"Direct"`` or ``"0 hops"`` mean zero).
+
+    ``None`` means unknown, which is not the same as zero: callers that gate on
+    hop count should treat it as "cannot confirm" rather than "direct".
+    """
+    hops_val = getattr(message, 'hops', None)
+    routing_info = getattr(message, 'routing_info', None)
+
+    if not isinstance(hops_val, int) and isinstance(routing_info, dict):
+        hops_val = routing_info.get('path_length')
+        if hops_val is None and routing_info.get('path_nodes'):
+            hops_val = len(routing_info['path_nodes'])
+
+    if not isinstance(hops_val, int):
+        path_str = getattr(message, 'path', None) or ""
+        hop_match = re.search(r'\((\d+)\s*hops?', path_str, re.IGNORECASE)
+        if hop_match:
+            hops_val = int(hop_match.group(1))
+        elif re.search(r'\bdirect\b|\b0\s*hops?\b', path_str, re.IGNORECASE):
+            hops_val = 0
+
+    return hops_val if isinstance(hops_val, int) else None
+
+
 def message_path_bytes_per_hop(message: Any, *, prefix_hex_chars: int = 2) -> int:
     """Best-effort bytes per hop for the message path (RF metadata or inferred from path text).
 

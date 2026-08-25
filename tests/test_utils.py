@@ -23,6 +23,7 @@ from modules.utils import (
     get_major_city_queries,
     get_packet_hash_placeholder,
     is_valid_timezone,
+    message_hop_count,
     node_ids_from_path_string,
     parse_location_string,
     parse_path_string,
@@ -937,3 +938,42 @@ class TestCalculatePacketHashEdgeCases:
         h = calculate_packet_hash("0800000000" + "00" + "ff")
         assert h != "0000000000000000"
 
+
+
+class TestMessageHopCount:
+    """Tests for message_hop_count()."""
+
+    @staticmethod
+    def _msg(**kw):
+        m = Mock()
+        m.hops = kw.get("hops")
+        m.path = kw.get("path")
+        m.routing_info = kw.get("routing_info")
+        return m
+
+    def test_prefers_message_hops(self):
+        assert message_hop_count(self._msg(hops=3, path="01,02 (2 hops)")) == 3
+
+    def test_falls_back_to_routing_path_length(self):
+        assert message_hop_count(self._msg(routing_info={"path_length": 2})) == 2
+
+    def test_falls_back_to_counting_path_nodes(self):
+        msg = self._msg(routing_info={"path_nodes": ["01", "02", "03"]})
+        assert message_hop_count(msg) == 3
+
+    def test_falls_back_to_parsing_the_path_string(self):
+        assert message_hop_count(self._msg(path="01,5f (2 hops)")) == 2
+        assert message_hop_count(self._msg(path="0a (1 hop)")) == 1
+
+    def test_direct_path_string_is_zero_hops(self):
+        assert message_hop_count(self._msg(path="Direct")) == 0
+        assert message_hop_count(self._msg(path="Direct via ROUTE_TYPE_FLOOD")) == 0
+        assert message_hop_count(self._msg(path="0 hops")) == 0
+
+    def test_unknown_is_none_not_zero(self):
+        """None means "cannot confirm", which callers must not read as direct."""
+        assert message_hop_count(self._msg()) is None
+        assert message_hop_count(self._msg(path="Unknown routing")) is None
+
+    def test_non_dict_routing_info_is_ignored(self):
+        assert message_hop_count(self._msg(routing_info="01,5f", path="Direct")) == 0

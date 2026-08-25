@@ -104,6 +104,16 @@ semantic versioning.
 
 ### Added
 
+- `hops_min:N` response-template filter, alongside `pathbytes_min:N`. It clears a
+  field unless the message actually travelled at least N hops, so
+  `{firstlast_distance|hops_min:1|prefix_if_nonempty: | F/L Dist: }` drops the whole
+  clause on a direct message. The distance placeholders render `N/A` when there is no
+  path, and `prefix_if_nonempty` treats that as a value and prints its label, so a
+  gate was needed; `pathbytes_min` was the only one available and it asks how the path
+  is *encoded*, which meant throwing away a measurable one-byte multi-hop distance to
+  suppress the direct case. `hops_min` asks about the route instead. An unknown hop
+  count clears the field rather than guessing.
+
 - `{packet_hash}` placeholder for `[Keywords]` responses, the test command's
   `response_format` and the path command's `reply_prefix`: the 16-char MeshCore
   packet identity hash (uppercase hex) of the packet that carried the request, so a

@@ -266,3 +266,61 @@ def test_test_command_response_omits_missing_packet_hash():
     out = cmd.format_response(msg, "hash={packet_hash|prefix_if_nonempty:id:}.")
 
     assert out == "hash=."
+
+
+def _msg(**kw):
+    base = dict(content="test", channel="c")
+    base.update(kw)
+    return MeshMessage(**base)
+
+
+@pytest.mark.unit
+def test_hops_min_clears_on_a_direct_message():
+    out = format_piped_template(
+        "ack{d|hops_min:1|prefix_if_nonempty: | Dist: }",
+        {"d": "N/A"},
+        message=_msg(path="Direct", hops=0, routing_info={"path_length": 0, "bytes_per_hop": 2}),
+    )
+    assert out == "ack"
+
+
+@pytest.mark.unit
+def test_hops_min_keeps_a_single_byte_multihop_path():
+    """The point of hops_min over pathbytes_min: a one-byte path still travelled,
+    so its distance is real and must not be discarded with the direct messages."""
+    msg = _msg(path="01,02 (2 hops)", hops=2,
+               routing_info={"path_length": 2, "path_nodes": ["01", "02"], "bytes_per_hop": 1})
+    assert format_piped_template("{d|hops_min:1}", {"d": "12.4km"}, message=msg) == "12.4km"
+    assert format_piped_template("{d|pathbytes_min:2}", {"d": "12.4km"}, message=msg) == ""
+
+
+@pytest.mark.unit
+def test_hops_min_threshold_is_inclusive():
+    msg = _msg(path="01,02 (2 hops)", hops=2)
+    assert format_piped_template("{d|hops_min:2}", {"d": "x"}, message=msg) == "x"
+    assert format_piped_template("{d|hops_min:3}", {"d": "x"}, message=msg) == ""
+
+
+@pytest.mark.unit
+def test_hops_min_zero_admits_a_direct_message():
+    msg = _msg(path="Direct", hops=0)
+    assert format_piped_template("{d|hops_min:0}", {"d": "x"}, message=msg) == "x"
+
+
+@pytest.mark.unit
+def test_hops_min_clears_when_the_hop_count_is_unknown():
+    """A gate that cannot confirm the route suppresses rather than guesses."""
+    msg = _msg(path=None, hops=None, routing_info=None)
+    assert format_piped_template("{d|hops_min:1}", {"d": "x"}, message=msg) == ""
+
+
+@pytest.mark.unit
+def test_hops_min_without_a_message_clears():
+    assert format_piped_template("{d|hops_min:1}", {"d": "x"}, message=None) == ""
+
+
+@pytest.mark.unit
+def test_hops_min_with_an_unusable_argument_passes_the_value_through():
+    msg = _msg(path="Direct", hops=0)
+    assert format_piped_template("{d|hops_min:abc}", {"d": "x"}, message=msg) == "x"
+    assert format_piped_template("{d|hops_min:-1}", {"d": "x"}, message=msg) == "x"

@@ -21,7 +21,12 @@ from ..command_prefix import (
 from ..config_schema import LEGACY_ENABLED_ALIASES
 from ..models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD, MeshMessage
 from ..security_utils import validate_pubkey_format
-from ..utils import format_elapsed_display, get_config_timezone, get_packet_hash_placeholder
+from ..utils import (
+    format_elapsed_display,
+    get_config_timezone,
+    get_packet_hash_placeholder,
+    message_hop_count,
+)
 
 # Task-local override for the active translator.  When set (via
 # ``BaseCommand.respond_in_sender_language``), ``translate`` / ``translate_get_value``
@@ -1222,23 +1227,8 @@ class BaseCommand(ABC):
 
     def get_hops_display_values(self, message: MeshMessage) -> tuple[str, str]:
         """Return hop count placeholders as numeric and pluralized strings."""
-        hops_val = getattr(message, 'hops', None)
-        routing_info = getattr(message, 'routing_info', None)
-
-        if not isinstance(hops_val, int) and routing_info is not None:
-            hops_val = routing_info.get('path_length')
-            if hops_val is None and routing_info.get('path_nodes'):
-                hops_val = len(routing_info['path_nodes'])
-
-        if not isinstance(hops_val, int):
-            path_str = message.path or ""
-            hop_match = re.search(r'\((\d+)\s*hops?', path_str, re.IGNORECASE)
-            if hop_match:
-                hops_val = int(hop_match.group(1))
-            elif re.search(r'\bdirect\b|\b0\s*hops?\b', path_str, re.IGNORECASE):
-                hops_val = 0
-
-        if not isinstance(hops_val, int):
+        hops_val = message_hop_count(message)
+        if hops_val is None:
             return "?", "?"
 
         hops_str = str(hops_val)
