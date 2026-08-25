@@ -8,6 +8,20 @@ semantic versioning.
 
 ### Fixed
 
+- Channel messages are now tied to their own RF packet, so `{packet_hash}`, `{path}`
+  and `{connection_info}` resolve on a channel instead of coming back empty or
+  `Unknown`. MeshCore's CHAN event carries neither `raw_hex` nor a pubkey prefix, so
+  none of the prefix strategies in `find_recent_rf_data` can fire and every channel
+  message fell through to the most-recent-packet fallback, which #80 correctly
+  refuses to attribute a route from. The decoded payload does restate three things
+  the RF row records independently—payload type, path length and SNR—so the fallback
+  can now be checked instead of assumed. SNR is the discriminating field: it is one
+  reception's measured value, quantised to 0.25 dB. Across 55 channel messages in my
+  logs the immediately preceding RF row agreed on all three every time, and a row
+  that disagrees, or that is older than the correlation window, stays a fallback.
+  Side effect worth knowing: verified channel messages now contribute their path to
+  the mesh graph, which they never did before.
+
 - `flood_scopes = *` no longer drops every channel message. Requiring RF data
   correlated to the message before `*` could authorize a reply looked reasonable,
   but MeshCore's CHAN payload carries neither `raw_hex` nor a pubkey prefix, so a

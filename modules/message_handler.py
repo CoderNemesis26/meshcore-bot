@@ -32,6 +32,10 @@ RF_MATCH_KEY = "_rf_match"
 RF_MATCH_EXACT = "exact"
 RF_MATCH_PUBKEY = "pubkey"
 RF_MATCH_PARTIAL = "partial"
+# Verified against the decoded message payload's own fields rather than a packet
+# prefix. Channel messages have no prefix to match on, so this is the only positive
+# correlation available to them (see _rf_data_matches_chan_payload).
+RF_MATCH_PAYLOAD = "payload"
 RF_MATCH_FALLBACK = "fallback"
 
 
@@ -1534,7 +1538,72 @@ class MessageHandler:
                 scope_eligible_only=scope_eligible_only,
             )
 
+        # A channel message has no packet prefix or pubkey to match on, so everything
+        # above lands on the most-recent-packet fallback. The decoded payload carries
+        # its own copies of fields the RF row also has, though, so the fallback can be
+        # checked rather than assumed.
+        if recent_rf_data is not None and not rf_data_is_correlated(recent_rf_data):
+            if self._rf_data_matches_chan_payload(recent_rf_data, payload):
+                recent_rf_data = {**recent_rf_data, RF_MATCH_KEY: RF_MATCH_PAYLOAD}
+                self.logger.debug(
+                    "Verified RF row %s against the channel payload (GRP_TXT, path_len=%s, "
+                    "SNR=%s); treating it as this message's packet",
+                    (recent_rf_data.get("packet_prefix") or "?")[:16],
+                    payload.get("path_len"),
+                    payload.get("SNR"),
+                )
+
         return recent_rf_data
+
+    def _rf_data_matches_chan_payload(
+        self, rf_data: dict[str, Any] | None, payload: dict[str, Any] | None
+    ) -> bool:
+        """True when a cached RF row is confirmed to be this channel message's packet.
+
+        MeshCore's CHAN event carries neither raw_hex nor a pubkey prefix, so the
+        prefix strategies in find_recent_rf_data cannot fire and every channel
+        message falls through to the most recent packet. That fallback is normally
+        right — the firmware emits the RF log row and the decoded CHAN event for the
+        same reception back to back — but "normally right" is not evidence, and #80
+        is what happens when a guess is treated as one.
+
+        The CHAN payload does, however, restate three things the RF row records
+        independently: payload type, path length and SNR. Requiring all three to
+        agree on a row heard within the correlation window turns the fallback into
+        a checked hypothesis. SNR is the discriminating one: it is the measured
+        value of a single reception, quantised to 0.25 dB, so an unrelated packet
+        matching all three is improbable rather than merely unlikely.
+        """
+        if not rf_data or not payload:
+            return False
+
+        if rf_data.get("payload_type_int") != self._grp_txt_payload_type_int():
+            return False
+
+        # Bound the age: the RF row and its CHAN event arrive together, so an old row
+        # that happens to agree is a coincidence, not this message.
+        timestamp = rf_data.get("timestamp")
+        if not isinstance(timestamp, (int, float)):
+            return False
+        if time.time() - timestamp > self.message_timeout:
+            return False
+
+        payload_path_len = payload.get("path_len")
+        rf_path_len = (rf_data.get("routing_info") or {}).get("path_length")
+        if payload_path_len is None or rf_path_len is None:
+            return False
+        if int(payload_path_len) != int(rf_path_len):
+            return False
+
+        payload_snr = payload.get("SNR")
+        rf_snr = rf_data.get("snr")
+        if payload_snr is None or rf_snr is None:
+            return False
+        try:
+            # Tolerance covers float representation only; SNR is quantised to 0.25 dB.
+            return abs(float(payload_snr) - float(rf_snr)) < 1e-6
+        except (TypeError, ValueError):
+            return False
 
     def find_recent_rf_data(
         self,

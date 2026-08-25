@@ -1,5 +1,6 @@
 """Tests for MessageHandler pure logic (no network, no meshcore device)."""
 
+import asyncio
 import configparser
 import time
 from unittest.mock import AsyncMock, Mock, patch
@@ -11,6 +12,7 @@ from modules.message_handler import (
     RF_MATCH_FALLBACK,
     RF_MATCH_KEY,
     RF_MATCH_PARTIAL,
+    RF_MATCH_PAYLOAD,
     RF_MATCH_PUBKEY,
     MessageHandler,
     rf_data_is_correlated,
@@ -2340,3 +2342,87 @@ class TestGlobalFloodAuthorization:
 
         rf = {"route_type_int": RouteType.TRANSPORT_FLOOD.value, RF_MATCH_KEY: RF_MATCH_EXACT}
         assert handler._is_confirmed_global_flood(rf, scoped_traffic_in_window=False) is False
+
+
+class TestChannelPayloadCorrelation:
+    """MeshCore's CHAN event has no packet prefix or pubkey, so a channel message can
+    only be tied to its packet by checking the RF row against fields the decoded
+    payload restates: payload type, path length and SNR."""
+
+    CHAN = {"type": "CHAN", "SNR": 0.0, "channel_idx": 1, "path_len": 0, "text": "x: test"}
+
+    @staticmethod
+    def _row(**over):
+        row = {
+            "timestamp": time.time(),
+            "packet_prefix": "00001540b45a2077b6bdbff6f59ca5af",
+            "pubkey_prefix": None,
+            "snr": 0.0,
+            "rssi": 0,
+            "raw_hex": "00001540b45a2077",
+            "payload_type_int": 5,  # GRP_TXT
+            "packet_hash": "A1B2C3D4E5F60789",
+            "routing_info": {"path_length": 0, "packet_hash": "A1B2C3D4E5F60789"},
+        }
+        row.update(over)
+        return row
+
+    def test_matching_row_is_confirmed(self, handler):
+        assert handler._rf_data_matches_chan_payload(self._row(), self.CHAN) is True
+
+    def test_wrong_payload_type_is_rejected(self, handler):
+        assert handler._rf_data_matches_chan_payload(
+            self._row(payload_type_int=4), self.CHAN
+        ) is False
+
+    def test_path_length_mismatch_is_rejected(self, handler):
+        row = self._row(routing_info={"path_length": 2})
+        assert handler._rf_data_matches_chan_payload(row, self.CHAN) is False
+
+    def test_snr_mismatch_is_rejected(self, handler):
+        """SNR is the discriminating field: it is one reception's measured value."""
+        assert handler._rf_data_matches_chan_payload(self._row(snr=-7.5), self.CHAN) is False
+
+    def test_stale_row_is_rejected(self, handler):
+        """The RF row and its CHAN event arrive together; an old row that happens to
+        agree is a coincidence, not this message."""
+        handler.message_timeout = 10.0
+        row = self._row(timestamp=time.time() - 60)
+        assert handler._rf_data_matches_chan_payload(row, self.CHAN) is False
+
+    def test_missing_fields_are_rejected(self, handler):
+        assert handler._rf_data_matches_chan_payload(self._row(snr=None), self.CHAN) is False
+        assert handler._rf_data_matches_chan_payload(self._row(routing_info={}), self.CHAN) is False
+        assert handler._rf_data_matches_chan_payload(self._row(timestamp=None), self.CHAN) is False
+        assert handler._rf_data_matches_chan_payload(self._row(), {}) is False
+        assert handler._rf_data_matches_chan_payload(None, self.CHAN) is False
+        assert handler._rf_data_matches_chan_payload(self._row(), {"SNR": 0.0}) is False
+
+    def _correlate(self, handler, rows):
+        handler.rf_data_timeout = 15.0
+        handler.message_timeout = 10.0
+        handler.enhanced_correlation = False
+        handler.recent_rf_data = list(rows)
+        return asyncio.run(
+            handler._correlate_channel_message_rf_data(
+                None, "", self.CHAN, scope_eligible_only=False, extended_timeout=30.0
+            )
+        )
+
+    def test_fallback_is_promoted_when_the_payload_confirms_it(self, handler):
+        result = self._correlate(handler, [self._row()])
+        assert result[RF_MATCH_KEY] == RF_MATCH_PAYLOAD
+        assert rf_data_is_correlated(result) is True
+        assert result["routing_info"]["packet_hash"] == "A1B2C3D4E5F60789"
+
+    def test_fallback_stays_a_fallback_when_the_payload_disagrees(self, handler):
+        result = self._correlate(handler, [self._row(snr=-7.5)])
+        assert result[RF_MATCH_KEY] == RF_MATCH_FALLBACK
+        assert rf_data_is_correlated(result) is False
+
+    def test_promotion_does_not_mutate_the_cache(self, handler):
+        row = self._row()
+        result = self._correlate(handler, [row])
+        assert result[RF_MATCH_KEY] == RF_MATCH_PAYLOAD
+        assert RF_MATCH_KEY not in row
+        assert RF_MATCH_KEY not in handler.recent_rf_data[0]
