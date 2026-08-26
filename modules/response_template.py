@@ -11,6 +11,7 @@ import re
 from typing import Any, Callable
 
 from .utils import message_hop_count, message_path_bytes_per_hop
+from .url_shortener import shorten_url
 
 FilterFn = Callable[[str, dict[str, Any], str], str]
 
@@ -66,12 +67,20 @@ def _filter_prefix_if_nonempty(value: str, ctx: dict[str, Any], args: str) -> st
         return ''
     return args + value
 
+def _filter_shorten_url(value: str, ctx: dict[str, Any], args: str) -> str:
+    """Shorten *value* URL using configured URL shortener (v.gd / is.gd compatible)."""
+    config = ctx.get('config')
+    if config is None:
+        return value
+    return shorten_url(value, config)
+
 
 RESPONSE_TEMPLATE_FILTERS: dict[str, FilterFn] = {
     'pathbytes_min': _filter_pathbytes_min,
     'pathbytes': _filter_pathbytes_min,
     'hops_min': _filter_hops_min,
     'prefix_if_nonempty': _filter_prefix_if_nonempty,
+    'shorten_url': _filter_shorten_url,
 }
 
 
@@ -116,6 +125,7 @@ def format_piped_template(
     *,
     message: Any = None,
     logger: Any = None,
+    config: Any = None,
     prefix_hex_chars: int = 2,
 ) -> str:
     """Replace ``{field}`` and ``{field|filter:arg|...}`` using *fields* and optional *message*.
@@ -136,6 +146,7 @@ def format_piped_template(
         'message': message,
         'logger': logger,
         'prefix_hex_chars': prefix_hex_chars,
+        'config': config,
     }
 
     def replace_placeholder(match: re.Match[str]) -> str:
