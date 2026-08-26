@@ -107,7 +107,6 @@ def _build_create_gd_url(long_url: str, base: str, api_key: str) -> str:
 def _build_create_shlink_url(long_url: str, base: str, api_key: str) -> str:
     from urllib.parse import urlparse, urlunparse
 
-    encoded = quote(long_url, safe="")
     root = _normalize_base(base)
     if "://" not in root:
         root = f"https://{root}"
@@ -206,30 +205,32 @@ def shorten_url_sync(
         ).strip()
         base = _normalize_base(base)
 
-        if base != "" and api_key != "":
-            if service == "shlink":
-                return _shorten_url_with_shlink(
-                    url_str,
-                    base,
-                    api_key,
-                    session=session,
-                    timeout=timeout,
-                    logger=logger,
-                )
-            else:
-                return _shorten_url_with_gd(
-                    url_str,
-                    base,
-                    api_key,
-                    session=session,
-                    timeout=timeout,
-                    logger=logger,
-                )
-        else:
-            if logger:
-                logger.warning(
-                    "Short URL base and API key are empty; some services may reject requests."
-                )
+        if service == "shlink":
+            if not api_key:
+                if logger:
+                    logger.warning(
+                        "short_url_website_service=shlink requires short_url_website_api_key; skipping."
+                    )
+                return ""
+            return _shorten_url_with_shlink(
+                url_str,
+                base,
+                api_key,
+                session=session,
+                timeout=timeout,
+                logger=logger,
+            )
+
+        # v.gd / is.gd-compatible: api_key is optional (unused for the public hosts,
+        # only appended for self-hosted alternates via _host_allows_key_in_query).
+        return _shorten_url_with_gd(
+            url_str,
+            base,
+            api_key,
+            session=session,
+            timeout=timeout,
+            logger=logger,
+        )
 
     except Exception as e:
         if logger:

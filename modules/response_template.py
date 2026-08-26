@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .utils import message_hop_count, message_path_bytes_per_hop
 from .url_shortener import shorten_url_sync
+from .utils import message_hop_count, message_path_bytes_per_hop
 
 FilterFn = Callable[[str, dict[str, Any], str], str]
 
