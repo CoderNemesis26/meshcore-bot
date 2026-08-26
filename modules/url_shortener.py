@@ -47,6 +47,7 @@ def _safe_config_get(config: Any, section: str, option: str, fallback: str = "")
     except Exception:
         return fallback
 
+
 DEFAULT_SHORT_URL_BASE = "https://v.gd"
 
 # Hostnames that use the public create.php API without an API key query param.
@@ -99,10 +100,9 @@ def _build_create_gd_url(long_url: str, base: str, api_key: str) -> str:
     query = f"format=simple&url={encoded}"
     if api_key and _host_allows_key_in_query(parsed.hostname or ""):
         query = f"{query}&key={quote(api_key, safe='')}"
-    rebuilt = urlunparse(
-        (parsed.scheme or "https", netloc, path, "", query, "")
-    )
+    rebuilt = urlunparse((parsed.scheme or "https", netloc, path, "", query, ""))
     return rebuilt
+
 
 def _build_create_shlink_url(long_url: str, base: str, api_key: str) -> str:
     from urllib.parse import urlparse, urlunparse
@@ -115,16 +115,22 @@ def _build_create_shlink_url(long_url: str, base: str, api_key: str) -> str:
     netloc = parsed.netloc
     if not netloc and parsed.path:
         netloc = parsed.path.split("/")[0]
-    path = (parsed.path or "").rstrip("/") + "/api/v3/short-urls"
+    path = (parsed.path or "").rstrip("/") + "/rest/v3/short-urls"
     if not path.startswith("/"):
         path = "/" + path
     query = ""
-    rebuilt = urlunparse(
-        (parsed.scheme or "https", netloc, path, "", query, "")
-    )
+    rebuilt = urlunparse((parsed.scheme or "https", netloc, path, "", query, ""))
     return rebuilt
 
-def _shorten_url_with_shlink(long_url: str, base: str, api_key: str, session: requests.Session | None = None, timeout: float = 5.0) -> str:
+
+def _shorten_url_with_shlink(
+    long_url: str,
+    base: str,
+    api_key: str,
+    session: requests.Session | None = None,
+    timeout: float = 5.0,
+    logger: logging.Logger | None = None,
+) -> str:
     """Shorten a URL using Shlink API."""
     import json
 
@@ -133,47 +139,43 @@ def _shorten_url_with_shlink(long_url: str, base: str, api_key: str, session: re
         "Content-Type": "application/json",
         "X-Api-Key": api_key,
     }
-    payload = json.dumps({"longUrl": long_url})
+    payload = json.dumps(
+        {"longUrl": long_url, "findIfExists": True, "tags": ["meshcore-bot"]}
+    )
+
     get = session.post if session is not None else requests.post
-    try:
-        response = get(shortener_url, headers=headers, data=payload, timeout=timeout)
-    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-        return ""
-    except Exception as e:
-        return ""
+    response = get(shortener_url, headers=headers, data=payload, timeout=timeout)
+    if logger:
+        logger.debug("Shlink response: %s", response.text)
+    data = response.json()
+    short_url = data.get("shortUrl") or data.get("shortUrlSlug")
 
-    if not response.ok:
-        return ""
-
-    try:
-        data = response.json()
-        short_url = data.get("shortUrl") or data.get("shortUrlSlug")
-        if short_url:
-            return short_url
-    except Exception:
-        return ""
+    if short_url:
+        return short_url
 
     return ""
 
-def _shorten_url_with_gd(long_url: str, base: str, api_key: str, session: requests.Session | None = None, timeout: float = 5.0) -> str:
+
+def _shorten_url_with_gd(
+    long_url: str,
+    base: str,
+    api_key: str,
+    session: requests.Session | None = None,
+    timeout: float = 5.0,
+    logger: logging.Logger | None = None,
+) -> str:
     """Shorten a URL using v.gd / is.gd API."""
     shortener_url = _build_create_gd_url(long_url, base, api_key)
+
     get = session.get if session is not None else requests.get
-    try:
-        response = get(shortener_url, timeout=timeout)
-    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-        return ""
-    except Exception as e:
-        return ""
 
-    if not response.ok:
-        return ""
-
+    response = get(shortener_url, timeout=timeout)
     short = _parse_simple_response(response.text)
     if short:
         return short
 
     return ""
+
 
 def shorten_url_sync(
     url: Any,
@@ -193,18 +195,46 @@ def shorten_url_sync(
             return ""
 
         base = _safe_config_get(config, "External_Data", "short_url_website", "")
-        service = safe_config_get(config, "External_Data", "short_url_website_service", "gd").strip().lower()
-        api_key = (_safe_config_get(config, "External_Data", "short_url_website_api_key", "") or "").strip()
+        service = (
+            _safe_config_get(config, "External_Data", "short_url_website_service", "gd")
+            .strip()
+            .lower()
+        )
+        api_key = (
+            _safe_config_get(config, "External_Data", "short_url_website_api_key", "")
+            or ""
+        ).strip()
         base = _normalize_base(base)
 
-        if service == "shlink":
-            return _shorten_url_with_shlink(url_str, base, api_key, session=session, timeout=timeout)
+        if base != "" and api_key != "":
+            if service == "shlink":
+                return _shorten_url_with_shlink(
+                    url_str,
+                    base,
+                    api_key,
+                    session=session,
+                    timeout=timeout,
+                    logger=logger,
+                )
+            else:
+                return _shorten_url_with_gd(
+                    url_str,
+                    base,
+                    api_key,
+                    session=session,
+                    timeout=timeout,
+                    logger=logger,
+                )
         else:
-            return _shorten_url_with_gd(url_str, base, api_key, session=session, timeout=timeout)
+            if logger:
+                logger.warning(
+                    "Short URL base and API key are empty; some services may reject requests."
+                )
+
     except Exception as e:
         if logger:
-            logger.debug("Unexpected error shortening URL: %s", e)
-        return ""   
+            logger.error("Unexpected error shortening URL: %s", e)
+        return ""
 
 
 async def shorten_url(
