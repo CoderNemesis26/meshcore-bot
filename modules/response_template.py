@@ -76,9 +76,9 @@ def _filter_shorten_url(value: str, ctx: dict[str, Any], args: str) -> str:
     config = ctx.get('config')
     if logger is not None:
         logger.debug("Shortening URL %r", value)
-    if config is None:
+    if config is None or value == '':
         if logger is not None:
-            logger.debug("Abandoning shorten url due to missing config")
+            logger.debug("Abandoning shorten url due to empty value or config")
         return value
     return shorten_url_sync(value, config=config, logger=logger) or value
 
