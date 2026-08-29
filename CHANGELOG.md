@@ -8,6 +8,22 @@ semantic versioning.
 
 ### Fixed
 
+- `path` no longer answers "No path information available in current message" on a
+  busy mesh (#255). Verifying a channel message against the RF cache only ever
+  checked the newest row, which assumes the RF log row and the decoded CHAN event
+  for one reception arrive back to back with nothing in between. On a dense mesh
+  they do not: a repeater's echo of the very same packet is routinely logged in the
+  gap. The reporter's message was heard directly (`SNR 13.25`, 0 hops) and again via
+  repeater `f0` 185 ms later (`SNR 12.0`, 1 hop); both rows carry packet hash
+  `392926C85DCB87D0`, but the check saw only the echo, disagreed on path length and
+  SNR, and left the route unresolved — so the bot withheld a path it had decoded
+  correctly. The cache is now searched for the row the payload matches instead of
+  testing just the most recent one. Rows that agree must resolve to a single packet
+  hash, so two unrelated packets that happen to agree stay a fallback and #80's
+  guarantee is unchanged: a route is still only ever attributed on evidence. SNR and
+  RSSI now come from the message's own reception too, rather than from whichever
+  packet was heard last.
+
 - MQTT brokers no longer flap in a reconnect storm (#248). Three things stacked up.
   First, the packet-capture watchdog ran `client.reconnect()` from its own thread
   every 30 seconds whenever `is_connected()` was false — which includes every moment
