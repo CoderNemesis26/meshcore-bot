@@ -8,6 +8,98 @@ semantic versioning.
 
 ### Fixed
 
+- `path` no longer answers "No path information available in current message" on a
+  busy mesh (#255). Verifying a channel message against the RF cache only ever
+  checked the newest row, which assumes the RF log row and the decoded CHAN event
+  for one reception arrive back to back with nothing in between. On a dense mesh
+  they do not: a repeater's echo of the very same packet is routinely logged in the
+  gap. The reporter's message was heard directly (`SNR 13.25`, 0 hops) and again via
+  repeater `f0` 185 ms later (`SNR 12.0`, 1 hop); both rows carry packet hash
+  `392926C85DCB87D0`, but the check saw only the echo, disagreed on path length and
+  SNR, and left the route unresolved — so the bot withheld a path it had decoded
+  correctly. The cache is now searched for the row the payload matches instead of
+  testing just the most recent one. Rows that agree must resolve to a single packet
+  hash, so two unrelated packets that happen to agree stay a fallback and #80's
+  guarantee is unchanged: a route is still only ever attributed on evidence. SNR and
+  RSSI now come from the message's own reception too, rather than from whichever
+  packet was heard last.
+
+- MQTT brokers no longer flap in a reconnect storm (#248). Three things stacked up.
+  First, the packet-capture watchdog ran `client.reconnect()` from its own thread
+  every 30 seconds whenever `is_connected()` was false — which includes every moment
+  paho's network thread is inside its own backoff. Two threads driving one client's
+  socket produced duplicate CONNACKs, spurious `MQTT_ERR_PROTOCOL` disconnects, and a
+  fixed-interval retry that flattened paho's 1→120s backoff into a hot loop. The
+  watchdog now observes, refreshes an expiring auth token so paho's next attempt can
+  succeed, and only intervenes when the network thread is gone and nothing is
+  retrying at all. Second, the generated client ID had no per-broker component, so
+  every broker in the process connected under the same ID; two hostnames belonging to
+  one cluster (`mqtt-a` and `mqtt-b` of the same service) evicted each other's session
+  on a six-second cycle. IDs are now distinct per broker. Third, a disconnect logged a
+  bare `rc=`, which reads against the CONNACK table even though paho reports
+  `MQTT_ERR_*` there — `rc=2` is a protocol error, not "client identifier rejected" —
+  so it now names the code.
+
+- A renewed MQTT auth token is now actually put in force. MQTT presents credentials
+  once, at CONNECT, so `username_pw_set` on a live session changed nothing and the
+  connection kept running on the token it was opened with until the broker evicted it
+  at that token's `exp`. Renewal is now followed by a clean, serialized reconnect
+  (`disconnect` → `loop_stop` → `reconnect` → `loop_start`, in that order, so the
+  network thread is joined before anything else touches the socket). Set
+  `mqttN_jwt_reconnect_on_renew = false` for a broker that ignores expiry on live
+  sessions.
+
+- Startup config-lint findings now go to the log file. They were printed to stderr
+  before the bot (and therefore its logger) existed, so under systemd they reached
+  only the journal and never `logs/meshcore_bot.log`. The linter had correctly
+  reported `[Test_Command] unknown key 'alias'. Did you mean 'aliases'?` on three
+  consecutive startups without that ever being visible to the operator reading logs.
+  Findings are still collected before anything opens the database, and stderr remains
+  the fallback when bot construction fails, which is when a config problem is the
+  likeliest cause.
+
+- `{hops}` and `{hops_label}` in a `[Keywords]` response now report the same hop count
+  a command response would for the same packet. The keyword formatter carried its own
+  implementation that consulted only `message.hops` and the path display string, so it
+  answered `?` whenever the count was known only from `routing_info`, and preferred a
+  stale path string over the packet's own `path_length` when both were present. All
+  three formatters now share `utils.message_hop_count`.
+
+- `pathbytes_min` no longer treats a direct message as a multi-byte path, so
+  `{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }` stops printing
+  `| Path Dist: N/A` on a hopless packet. `bytes_per_hop` describes how a path is
+  encoded, and a direct packet has no path for it to describe, so
+  `bytes_per_hop_from_routing_and_nodes` now returns 1 whenever the packet reports no
+  hops—which is what its docstring already claimed. The bug was latent until channel
+  messages started carrying routing info.
+
+- Channel messages are now tied to their own RF packet, so `{packet_hash}`, `{path}`
+  and `{connection_info}` resolve on a channel instead of coming back empty or
+  `Unknown`. MeshCore's CHAN event carries neither `raw_hex` nor a pubkey prefix, so
+  none of the prefix strategies in `find_recent_rf_data` can fire and every channel
+  message fell through to the most-recent-packet fallback, which #80 correctly
+  refuses to attribute a route from. The decoded payload does restate three things
+  the RF row records independently—payload type, path length and SNR—so the fallback
+  can now be checked instead of assumed. SNR is the discriminating field: it is one
+  reception's measured value, quantised to 0.25 dB. Across 55 channel messages in my
+  logs the immediately preceding RF row agreed on all three every time, and a row
+  that disagrees, or that is older than the correlation window, stays a fallback.
+  Side effect worth knowing: verified channel messages now contribute their path to
+  the mesh graph, which they never did before.
+
+- `flood_scopes = *` no longer drops every channel message. Requiring RF data
+  correlated to the message before `*` could authorize a reply looked reasonable,
+  but MeshCore's CHAN payload carries neither `raw_hex` nor a pubkey prefix, so a
+  channel message has no correlation key at all and always lands on the
+  most-recent-packet fallback. The gate could therefore never pass: across three
+  log files every one of 45 received channel messages was rejected. `*` now also
+  accepts the window-wide absence of scope-eligible traffic as proof: a scoped
+  message travels as TRANSPORT_FLOOD GRP_TXT, so if the radio heard no such packet
+  while the message arrived, the message cannot have been scoped. Unlike a route
+  type read off a fallback row, that doesn't depend on having picked the right
+  cached packet, so genuinely ambiguous cases—a TC_FLOOD GRP_TXT heard alongside
+  the message—still fail closed.
+
 - The web viewer's radio **Disconnect** button is now **Stop Bot** and asks for
   confirmation first (#240). It never was a radio-only disconnect: the main loop runs
   while the bot is connected, so disconnecting ended the process, which surprised at
@@ -69,6 +161,27 @@ semantic versioning.
 - Added notes on connecting to waev.app MQTT brokers to the `packet_capture.md` file.
 
 ### Added
+
+- `mqttN_keepalive` (default 60) sets the MQTT PINGREQ interval per broker. It was
+  hardcoded at 60 before, which is long for websockets through a proxy that drops
+  idle connections.
+
+- `hops_min:N` response-template filter, alongside `pathbytes_min:N`. It clears a
+  field unless the message actually travelled at least N hops, so
+  `{firstlast_distance|hops_min:1|prefix_if_nonempty: | F/L Dist: }` drops the whole
+  clause on a direct message. The distance placeholders render `N/A` when there is no
+  path, and `prefix_if_nonempty` treats that as a value and prints its label, so a
+  gate was needed; `pathbytes_min` was the only one available and it asks how the path
+  is *encoded*, which meant throwing away a measurable one-byte multi-hop distance to
+  suppress the direct case. `hops_min` asks about the route instead. An unknown hop
+  count clears the field rather than guessing.
+
+- `{packet_hash}` placeholder for `[Keywords]` responses, the test command's
+  `response_format` and the path command's `reply_prefix`: the 16-char MeshCore
+  packet identity hash (uppercase hex) of the packet that carried the request, so a
+  reply can be tied back to a specific transmission when comparing paths. It comes
+  only from the routing info of an RF packet actually correlated to the message, and
+  renders empty otherwise, so a hash from an unrelated transmission is never shown.
 
 - **Scheduled messages can be managed from the web viewer** (#174). A new Schedule page
   lists every `[Scheduled_Messages]` entry with its next run time and offers add, edit

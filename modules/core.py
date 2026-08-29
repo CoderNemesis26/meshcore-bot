@@ -1086,7 +1086,7 @@ admin_commands = repeater
 
 [Keywords]
 # Keyword-response pairs (keyword = response format)
-# Available fields: {sender}, {connection_info}, {snr}, {rssi}, {timestamp}, {path}, {path_distance}, {firstlast_distance}
+# Available fields: {sender}, {connection_info}, {snr}, {rssi}, {timestamp}, {path}, {elapsed}, {packet_hash}, {path_distance}, {firstlast_distance}
 # {sender}: Name/ID of message sender
 # {connection_info}: Path info, SNR, and RSSI combined (e.g., "01,5f (2 hops) | SNR: 15 dB | RSSI: -120 dBm")
 # {snr}: Signal-to-noise ratio in dB
@@ -1097,6 +1097,8 @@ admin_commands = repeater
 # {hops_label}: Same as hops with "hop"/"hops" and pluralization (e.g., "1 hop", "2 hops")
 # {path_distance}: Total distance between all hops in path with locations (e.g., "123.4km (3 segs, 1 no-loc)")
 # {firstlast_distance}: Distance between first and last repeater in path (e.g., "45.6km" or empty if locations missing)
+# {elapsed}: Elapsed time (e.g. "1234ms") or "Sync Device Clock" when the device clock is invalid
+# {packet_hash}: 16-char MeshCore packet identity hash (uppercase hex); renders empty when RF correlation did not attach routing info
 test = "ack [@{sender}]{phrase_part} | {connection_info} | Received at: {timestamp}"
 ping = "Pong!"
 pong = "Ping!"

@@ -32,6 +32,10 @@ RF_MATCH_KEY = "_rf_match"
 RF_MATCH_EXACT = "exact"
 RF_MATCH_PUBKEY = "pubkey"
 RF_MATCH_PARTIAL = "partial"
+# Verified against the decoded message payload's own fields rather than a packet
+# prefix. Channel messages have no prefix to match on, so this is the only positive
+# correlation available to them (see _rf_data_matches_chan_payload).
+RF_MATCH_PAYLOAD = "payload"
 RF_MATCH_FALLBACK = "fallback"
 
 
@@ -239,22 +243,44 @@ class MessageHandler:
         self,
         rf_data: dict[str, Any] | None,
         packet_info: dict[str, Any] | None = None,
+        *,
+        scoped_traffic_in_window: bool = True,
     ) -> bool:
-        """True only when this message's own packet is proven ordinary FLOOD.
+        """True only when this message is proven *not* to be a scoped regional flood.
 
-        Used to decide whether a '*' entry in flood_scopes authorises a reply. '*'
-        permits unscoped global traffic, so it needs positive evidence of
-        RouteType.FLOOD from RF data correlated to *this* message. Absent or
-        uncorrelated data means the scope is unknown, not global.
+        Used to decide whether a '*' entry in flood_scopes authorizes a reply. '*'
+        permits unscoped global traffic, so it needs positive evidence, and there
+        are two independent ways to get it:
+
+        * RF data correlated to *this* message showing RouteType.FLOOD.
+        * No scope-eligible packet anywhere in the RF window
+          (``scoped_traffic_in_window=False``). A scoped message travels as
+          TRANSPORT_FLOOD GRP_TXT, so if the radio heard no such packet while this
+          message arrived, the message cannot have been scoped. That conclusion is
+          window-wide, so unlike a route type read off a fallback row it does not
+          depend on having picked the right cached packet.
+
+        The second route is what makes '*' usable on a channel: MeshCore's CHAN
+        payload carries neither raw_hex nor a pubkey prefix, so a channel message
+        has no correlation key at all and always lands on the most-recent-packet
+        fallback. Requiring correlation alone rejected *every* channel message.
+
+        An empty RF window still fails closed: with no observed traffic there is
+        no evidence either way.
         """
-        if not rf_data or not rf_data_is_correlated(rf_data):
+        if not rf_data:
             return False
 
-        route_type = rf_data.get("route_type_int")
-        dec_rt, _tc, _pt, _hex = self._scope_fields_from_packet_info(packet_info)
-        if dec_rt is not None:
-            route_type = dec_rt
-        return route_type == RouteType.FLOOD.value
+        if rf_data_is_correlated(rf_data):
+            route_type = rf_data.get("route_type_int")
+            dec_rt, _tc, _pt, _hex = self._scope_fields_from_packet_info(packet_info)
+            if dec_rt is not None:
+                route_type = dec_rt
+            return route_type == RouteType.FLOOD.value
+
+        # Uncorrelated: this row describes some other packet, so its route type
+        # proves nothing about the message. Only the absence of scoped traffic does.
+        return not scoped_traffic_in_window
 
     def _is_rf_data_scope_eligible(
         self,
@@ -1512,7 +1538,128 @@ class MessageHandler:
                 scope_eligible_only=scope_eligible_only,
             )
 
+        # A channel message has no packet prefix or pubkey to match on, so everything
+        # above lands on the most-recent-packet fallback. The decoded payload carries
+        # its own copies of fields the RF row also has, though, so the cache can be
+        # searched for this message's own packet rather than assuming the newest row.
+        if recent_rf_data is not None and not rf_data_is_correlated(recent_rf_data):
+            verified = self._find_rf_row_matching_chan_payload(
+                payload, scope_eligible_only=scope_eligible_only
+            )
+            if verified is not None:
+                if verified.get("packet_prefix") != recent_rf_data.get("packet_prefix"):
+                    self.logger.debug(
+                        "Most recent RF row %s is not this message's packet (a later "
+                        "reception of another packet); the payload matches %s instead",
+                        (recent_rf_data.get("packet_prefix") or "?")[:16],
+                        (verified.get("packet_prefix") or "?")[:16],
+                    )
+                recent_rf_data = {**verified, RF_MATCH_KEY: RF_MATCH_PAYLOAD}
+                self.logger.debug(
+                    "Verified RF row %s against the channel payload (GRP_TXT, path_len=%s, "
+                    "SNR=%s); treating it as this message's packet",
+                    (recent_rf_data.get("packet_prefix") or "?")[:16],
+                    payload.get("path_len"),
+                    payload.get("SNR"),
+                )
+
         return recent_rf_data
+
+    def _find_rf_row_matching_chan_payload(
+        self, payload: dict[str, Any] | None, *, scope_eligible_only: bool = False
+    ) -> dict[str, Any] | None:
+        """Return the cached RF row this channel message was received on, or None.
+
+        Checking only the newest row assumes the RF log row and the decoded CHAN
+        event for one reception arrive back to back with nothing in between. On a
+        dense mesh they do not: a repeater's echo of the very same packet is
+        routinely logged in the gap, so the newest row is that echo — a different
+        path length and a different measured SNR — and the message loses its route
+        even though its own row is sitting in the cache (#255). Search the cache
+        instead, and let _rf_data_matches_chan_payload decide which row is ours.
+
+        Two rows can only both match when they are receptions of the same packet
+        (same hash) that also agree on path length and SNR; anything else is
+        ambiguous and keeps the fallback tag, because a guess is what #80 cost.
+        """
+        if not payload:
+            return None
+
+        matches = [
+            row
+            for row in self.recent_rf_data
+            if self._rf_data_matches_chan_payload(row, payload)
+            and (not scope_eligible_only or self._is_rf_data_scope_eligible(row))
+        ]
+        if not matches:
+            return None
+
+        if len(matches) > 1:
+            hashes = {row.get("packet_hash") for row in matches}
+            if len(hashes) != 1 or not all(hashes):
+                self.logger.debug(
+                    "%d cached RF rows agree with the channel payload across %d packet(s); "
+                    "leaving the route unresolved rather than guessing",
+                    len(matches),
+                    len(hashes),
+                )
+                return None
+
+        return max(matches, key=lambda row: row["timestamp"])
+
+    def _rf_data_matches_chan_payload(
+        self, rf_data: dict[str, Any] | None, payload: dict[str, Any] | None
+    ) -> bool:
+        """True when a cached RF row is confirmed to be this channel message's packet.
+
+        MeshCore's CHAN event carries neither raw_hex nor a pubkey prefix, so the
+        prefix strategies in find_recent_rf_data cannot fire and every channel
+        message falls through to the most recent packet. That fallback is normally
+        right — the firmware emits the RF log row and the decoded CHAN event for the
+        same reception back to back — but "normally right" is not evidence, and #80
+        is what happens when a guess is treated as one.
+
+        The CHAN payload does, however, restate three things the RF row records
+        independently: payload type, path length and SNR. Requiring all three to
+        agree on a row heard within the correlation window turns the fallback into
+        a checked hypothesis. SNR is the discriminating one: it is the measured
+        value of a single reception, quantised to 0.25 dB, so an unrelated packet
+        matching all three is improbable rather than merely unlikely.
+
+        _find_rf_row_matching_chan_payload applies this to every cached row rather
+        than only the newest, so a repeater echo logged in between cannot displace
+        the message's own row (#255).
+        """
+        if not rf_data or not payload:
+            return False
+
+        if rf_data.get("payload_type_int") != self._grp_txt_payload_type_int():
+            return False
+
+        # Bound the age: the RF row and its CHAN event arrive together, so an old row
+        # that happens to agree is a coincidence, not this message.
+        timestamp = rf_data.get("timestamp")
+        if not isinstance(timestamp, (int, float)):
+            return False
+        if time.time() - timestamp > self.message_timeout:
+            return False
+
+        payload_path_len = payload.get("path_len")
+        rf_path_len = (rf_data.get("routing_info") or {}).get("path_length")
+        if payload_path_len is None or rf_path_len is None:
+            return False
+        if int(payload_path_len) != int(rf_path_len):
+            return False
+
+        payload_snr = payload.get("SNR")
+        rf_snr = rf_data.get("snr")
+        if payload_snr is None or rf_snr is None:
+            return False
+        try:
+            # Tolerance covers float representation only; SNR is quantised to 0.25 dB.
+            return abs(float(payload_snr) - float(rf_snr)) < 1e-6
+        except (TypeError, ValueError):
+            return False
 
     def find_recent_rf_data(
         self,
@@ -2416,12 +2563,14 @@ class MessageHandler:
                 # the normal case; without it the scope is unknown and an allowlist
                 # should fail closed rather than assume global.
                 if allow_global and not self._is_confirmed_global_flood(
-                    recent_rf_data, packet_info
+                    recent_rf_data,
+                    packet_info,
+                    scoped_traffic_in_window=scope_rf_data is not None,
                 ):
                     self.logger.info(
-                        "Ignoring channel message: flood_scopes lists '*', but this "
-                        "message's packet could not be confirmed as unscoped FLOOD "
-                        "(scope unknown, not global)"
+                        "Ignoring channel message: flood_scopes lists '*', but a scoped "
+                        "TC_FLOOD packet was heard alongside this message and it could "
+                        "not be confirmed as unscoped FLOOD (scope unknown, not global)"
                     )
                     return
 

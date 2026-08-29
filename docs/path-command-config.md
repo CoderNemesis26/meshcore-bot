@@ -18,13 +18,15 @@ These options only affect the **path** command’s reply text and whether repeat
 **`reply_prefix`** (string, default empty)
 
 - Prepended as the first line of path command RF replies (only the **first** chunk when the reply is split for length).
-- Placeholders: `{sender}`, `{connection_info}`, `{path}`, `{hops}`, `{hops_label}`, `{timestamp}`, `{snr}`, `{rssi}`, `{path_distance}`.
+- Placeholders: `{sender}`, `{connection_info}`, `{path}`, `{hops}`, `{hops_label}`, `{timestamp}`, `{snr}`, `{rssi}`, `{packet_hash}`, `{path_distance}`.
 - `{path_distance}` is the total distance travelled, summed sender → each resolved hop → bot (e.g. `12.4km`). It is **empty** whenever the chain cannot be measured end to end: an unresolved hop, a prefix collision, a node with no stored coordinates, an unknown sender position, or no `[Bot] bot_latitude`/`bot_longitude`. A partial sum is never reported, since it would understate the real distance.
+- `{packet_hash}` is the 16-char MeshCore packet identity hash (uppercase hex) of the packet that carried the request. It is **empty** when RF correlation could not tie a heard packet to this message, so a hash from an unrelated transmission is never shown.
 - Supports the same **feed-style pipe filters** as the test command's `response_format` (see `modules/response_template.py`). Use `prefix_if_nonempty` so a label disappears along with an empty distance:
 
 ```ini
 reply_prefix = "{path_distance|prefix_if_nonempty:📏 }\n"
 ```
+- `hops_min:N` clears a field unless the message actually travelled at least N hops. `{path_distance}` renders `N/A` on a direct message, which `prefix_if_nonempty` treats as a value, so gate it first: `{path_distance|hops_min:1|prefix_if_nonempty:📏 }`. Unlike `pathbytes_min:N`, which asks how the path is *encoded*, this keeps a measurable one-byte multi-hop path.
 
 **`minimum_path_bytes`** (integer `0`–`3`, default `0`)
 

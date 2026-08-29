@@ -416,6 +416,7 @@ companion_min_inactive_days = 30
 # {path_distance} - Total distance between all hops in path with locations (e.g., "123.4km (3 segs, 1 no-loc)")
 # {firstlast_distance} - Distance between first and last repeater in path (e.g., "45.6km" or empty if locations missing)
 # {elapsed} - Elapsed time (e.g. 1234ms) or "Sync Device Clock" when device clock is invalid (use {elapsed} only; do not append ms)
+# {packet_hash} - 16-char MeshCore packet identity hash (uppercase hex); renders empty when RF correlation did not attach routing info
 #
 # To add newlines in responses, use \n (single backslash + n):
 # Example: test = "Line 1\nLine 2\nLine 3"
@@ -1032,12 +1033,13 @@ enable_p_shortcut = true
 
 # Optional first line prepended to path command RF replies.
 # Placeholders match keyword-style responses: {sender}, {connection_info}, {path},
-# {hops}, {hops_label}, {timestamp}, {snr}, {rssi}, plus {path_distance}.
+# {hops}, {hops_label}, {timestamp}, {snr}, {rssi}, {packet_hash}, plus {path_distance}.
 # {path_distance} is the total distance travelled (sender -> hops -> bot), e.g. "12.4km".
 # It renders empty unless every node in the chain has known coordinates and the bot has
 # bot_latitude/bot_longitude set, so a partial sum is never mistaken for the full distance.
 # Feed-style pipe filters are supported (same engine as [Test_Command] response_format),
-# so a label can disappear along with an empty value.
+# so a label can disappear along with an empty value. hops_min:1 drops a clause on a
+# direct message, where {path_distance} would otherwise render "N/A".
 # Only the first RF chunk includes the prefix when the reply is split.
 # Example: @[{sender}]
 # Example: {path_distance|prefix_if_nonempty:\U0001F4CF }
@@ -1551,11 +1553,16 @@ require_path_bytes_failure_response =
 
 # Optional: full ack template for test/t. When set, overrides [Keywords] test for this command only.
 # Same placeholders as Keywords (sender, phrase, phrase_part, connection_info, path, hops, hops_label,
-# timestamp, elapsed, snr, rssi, path_distance, firstlast_distance).
+# timestamp, elapsed, snr, rssi, packet_hash, path_distance, firstlast_distance).
 # {firstlast_distance} requires at least two path nodes with stored repeater/roomserver coordinates.
 # Pipe filters (feed-style), e.g. only show cumulative path distance when hops are multibyte (2+ bytes per hop):
 # response_format = ack @[{sender}]{phrase_part} | {connection_info}{path_distance|pathbytes_min:2|prefix_if_nonempty: | Path Dist: }| F/L Dist: {firstlast_distance} | {elapsed} | Rec: {timestamp}
-# Filters: pathbytes_min:N (alias pathbytes:N) clears the field unless bytes_per_hop >= N; prefix_if_nonempty:L prepends literal L when value non-empty after prior filters. If L contains |, put prefix_if_nonempty last in that placeholder (it consumes the rest of the chain as its literal).
+# Filters: pathbytes_min:N (alias pathbytes:N) clears the field unless bytes_per_hop >= N; hops_min:N clears it unless the message travelled at least N hops; prefix_if_nonempty:L prepends literal L when value non-empty after prior filters. If L contains |, put prefix_if_nonempty last in that placeholder (it consumes the rest of the chain as its literal).
+# hops_min asks about the route, pathbytes_min about how it is encoded. Use hops_min:1 to drop a
+# distance clause on a direct message without also dropping a measurable one-byte multi-hop path.
+# The distance placeholders render "N/A" on a direct message, which is non-empty, so
+# prefix_if_nonempty alone will still print its label there -- gate with hops_min:1 first:
+# response_format = ack @[{sender}]{phrase_part} | {path}{firstlast_distance|hops_min:1|prefix_if_nonempty: | F/L Dist: }{packet_hash|prefix_if_nonempty: | Hash: }
 # channels =
 [Trace_Command]
 # Enable or disable the trace/tracer commands (link diagnostics)
@@ -1930,6 +1937,8 @@ observer_name =
 #                                     # Default false. Only for self-signed brokers on a
 #                                     # trusted network — otherwise credentials are MITMable.
 # mqttN_websocket_path = /mqtt        # WebSocket path (for websockets transport)
+# mqttN_keepalive = 60                # Seconds between PINGREQs. Lower (30) for websockets
+#                                     # through a proxy that drops idle connections.
 # mqttN_username =                     # MQTT username (optional, auto-generated for auth tokens)
 # mqttN_password =                     # MQTT password (optional, auto-generated for auth tokens)
 # mqttN_use_auth_token = true/false   # Use JWT auth token instead of username/password
@@ -1937,7 +1946,9 @@ observer_name =
 # mqttN_topic_status =                # Status topic template (uses placeholders below)
 # mqttN_topic_packets =               # Packets topic template (uses placeholders below)
 # mqttN_topic_prefix =                # Legacy topic prefix (fallback if topic_status/topic_packets not set)
-# mqttN_client_id =                   # MQTT client ID (optional, auto-generated from bot name)
+# mqttN_client_id =                   # MQTT client ID (optional; one is generated per broker).
+#                                     # Two brokers must never share an ID — brokers behind one
+#                                     # cluster (mqtt-a/mqtt-b) will evict each other's session.
 # mqttN_upload_packet_types =         # Comma-separated packet types to upload (e.g. 2,4); empty = all
 # mqttN_include_decoded = true/false  # Publish the decoded object to this broker (default: include_decoded)
 # mqttN_neighbors = true/false        # Publish the zero-hop neighbours snapshot to this broker.
@@ -1976,6 +1987,9 @@ mqtt1_upload_packet_types =
 # Optional per-broker JWT (inherit globals if omitted):
 # mqtt1_jwt_ttl_seconds = 3600           # JWT exp claim: iat + this many seconds
 # mqtt1_jwt_renewal_interval = 1800      # Refresh password this often; use < ttl; 0 = no renewal loop
+# mqtt1_jwt_reconnect_on_renew = true    # Reconnect after renewing so the fresh token is in force.
+#                                        # Default true. Brokers that enforce the JWT's expiry drop
+#                                        # the session otherwise. Off only if yours ignores expiry.
 
 # MQTT Broker 2 - Let's Mesh Analyzer (EU)
 mqtt2_enabled = true

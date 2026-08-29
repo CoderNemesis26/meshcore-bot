@@ -21,7 +21,12 @@ from ..command_prefix import (
 from ..config_schema import LEGACY_ENABLED_ALIASES
 from ..models import CHANNEL_REGIONAL_FLOOD_SCOPE_BODY_OVERHEAD, MeshMessage
 from ..security_utils import validate_pubkey_format
-from ..utils import format_elapsed_display, get_config_timezone
+from ..utils import (
+    format_elapsed_display,
+    get_config_timezone,
+    get_packet_hash_placeholder,
+    message_hop_count,
+)
 
 # Task-local override for the active translator.  When set (via
 # ``BaseCommand.respond_in_sender_language``), ``translate`` / ``translate_get_value``
@@ -954,6 +959,49 @@ class BaseCommand(ABC):
         message.content_lower = content.lower()
         return message.content_lower
 
+    def split_trigger_and_args(self, content: str) -> tuple[Optional[str], str]:
+        """Split message content into ``(matched_keyword, args)``.
+
+        Matches against ``self.keywords`` (built-in stems plus config ``aliases``),
+        preferring the longest keyword so multi-word triggers win. The configured
+        command prefix is stripped for execute paths that still see raw
+        command-style text.
+
+        Args:
+            content: Raw or partially cleaned message text.
+
+        Returns:
+            ``(keyword, args)`` when a keyword matches as the first token(s);
+            ``(None, content)`` (after prefix stripping) otherwise.
+        """
+        text = content.strip()
+        # Strip the configured prefix; bare "!" only in legacy no-prefix mode, so a
+        # bot configured with command_prefix = / does not silently accept "!test".
+        matched = find_matching_prefix(text, self._command_prefixes)
+        if matched is not None:
+            text = text[len(matched):].strip()
+        elif not self._command_prefixes and text.startswith('!'):
+            text = text[1:].strip()
+        if not text or not self.keywords:
+            return None, text
+
+        # Longest first (word count, then length) so "dad joke" wins over a shorter
+        # stem. Compare word by word rather than slicing the lowered copy by keyword
+        # length: str.lower() can change length for non-ASCII aliases, which would
+        # misalign the offset and cut the args in the wrong place.
+        for keyword in sorted(self.keywords, key=lambda k: (len(k.split()), len(k)), reverse=True):
+            kw_words = keyword.lower().split()
+            if not kw_words:
+                continue
+            parts = text.split(maxsplit=len(kw_words))
+            if len(parts) < len(kw_words):
+                continue
+            if [part.lower() for part in parts[:len(kw_words)]] != kw_words:
+                continue
+            args = parts[len(kw_words)].strip() if len(parts) > len(kw_words) else ""
+            return keyword.lower(), args
+        return None, text
+
     def matches_keyword(self, message: MeshMessage) -> bool:
         """Check if this command matches the message content based on keywords.
 
@@ -1179,23 +1227,8 @@ class BaseCommand(ABC):
 
     def get_hops_display_values(self, message: MeshMessage) -> tuple[str, str]:
         """Return hop count placeholders as numeric and pluralized strings."""
-        hops_val = getattr(message, 'hops', None)
-        routing_info = getattr(message, 'routing_info', None)
-
-        if not isinstance(hops_val, int) and routing_info is not None:
-            hops_val = routing_info.get('path_length')
-            if hops_val is None and routing_info.get('path_nodes'):
-                hops_val = len(routing_info['path_nodes'])
-
-        if not isinstance(hops_val, int):
-            path_str = message.path or ""
-            hop_match = re.search(r'\((\d+)\s*hops?', path_str, re.IGNORECASE)
-            if hop_match:
-                hops_val = int(hop_match.group(1))
-            elif re.search(r'\bdirect\b|\b0\s*hops?\b', path_str, re.IGNORECASE):
-                hops_val = 0
-
-        if not isinstance(hops_val, int):
+        hops_val = message_hop_count(message)
+        if hops_val is None:
             return "?", "?"
 
         hops_str = str(hops_val)
@@ -1220,6 +1253,7 @@ class BaseCommand(ABC):
             'timestamp': self.format_timestamp(message),
             'snr': message.snr or "Unknown",
             'rssi': message.rssi or "Unknown",
+            'packet_hash': get_packet_hash_placeholder(message),
         }
 
     def format_response(self, message: MeshMessage, response_format: str,

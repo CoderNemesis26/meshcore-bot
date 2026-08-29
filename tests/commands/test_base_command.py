@@ -262,6 +262,25 @@ class TestFormatResponse:
 
         assert result == "01,5f (2 hops)|2|2 hops"
 
+    def test_formats_packet_hash_from_routing_info(self, command_mock_bot):
+        cmd = _TestCommand(command_mock_bot)
+        msg = mock_message(
+            content="path",
+            routing_info={"packet_hash": "ABCDEF0123456789"},
+        )
+
+        result = cmd.format_response(msg, "{packet_hash}")
+
+        assert result == "ABCDEF0123456789"
+
+    def test_packet_hash_omitted_when_routing_info_missing(self, command_mock_bot):
+        cmd = _TestCommand(command_mock_bot)
+        msg = mock_message(content="path")
+
+        result = cmd.format_response(msg, "hash={packet_hash}.")
+
+        assert result == "hash=."
+
 
 class TestCanExecute:
     """Tests for can_execute()."""

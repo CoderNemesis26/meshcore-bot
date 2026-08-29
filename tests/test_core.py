@@ -1,7 +1,9 @@
 """Tests for MeshCoreBot logic (config loading, radio settings, helpers)."""
 
 import asyncio
+import socket
 import struct
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -863,9 +865,41 @@ class TestSendStartupAdvertTimeout:
 class TestBotAdminServer:
     """Admin HTTP server: /api/admin/reload and /api/admin/health."""
 
-    def _make_bot_with_admin(self, tmp_path, port=15001):
+    @staticmethod
+    def _free_port() -> int:
+        """Reserve a port from the ephemeral range and hand the number back.
+
+        Hardcoded ports make the suite unrunnable twice at once. The second
+        process fails to bind, but its request still reaches the first process's
+        server on that port and comes back with whatever that server happens to
+        be patched to return, which surfaces as an unrelated assertion failure.
+        """
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    @staticmethod
+    def _wait_until_serving(port: int, timeout: float = 5.0) -> None:
+        """Block until the admin server accepts connections, or fail loudly.
+
+        The server comes up in a thread; a fixed sleep is either too short on a
+        loaded machine or wasted time on an idle one. Polling also turns a server
+        that never binds into a clear message instead of a confusing failure at
+        the assertion further down.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    return
+            except OSError:
+                time.sleep(0.01)
+        raise AssertionError(f"admin server never started listening on port {port}")
+
+    def _make_bot_with_admin(self, tmp_path):
         """Write config with [Admin] enabled and return a bot + token."""
         token = "test-secret-token"
+        port = self._free_port()
         config_file = tmp_path / "config.ini"
         db_path = tmp_path / "bot.db"
         config_file.write_text(
@@ -930,15 +964,14 @@ token =
 
     def test_reload_endpoint_success(self, tmp_path):
         """POST /api/admin/reload returns 200 and success=true when reload succeeds."""
-        import time
         import urllib.request
 
-        bot, token, port = self._make_bot_with_admin(tmp_path, port=15003)
+        bot, token, port = self._make_bot_with_admin(tmp_path)
 
         with patch.object(bot, "reload_config", return_value=(True, "Configuration reloaded successfully")):
             server = bot._admin_server
             server.start()
-            time.sleep(0.4)
+            self._wait_until_serving(port)
 
             req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/admin/reload",
@@ -953,16 +986,15 @@ token =
 
     def test_reload_endpoint_failure(self, tmp_path):
         """POST /api/admin/reload returns 409 when reload is rejected."""
-        import time
         import urllib.request
         from urllib.error import HTTPError
 
-        bot, token, port = self._make_bot_with_admin(tmp_path, port=15004)
+        bot, token, port = self._make_bot_with_admin(tmp_path)
 
         with patch.object(bot, "reload_config", return_value=(False, "Radio settings changed")):
             server = bot._admin_server
             server.start()
-            time.sleep(0.4)
+            self._wait_until_serving(port)
 
             req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/admin/reload",
@@ -975,14 +1007,13 @@ token =
 
     def test_reload_endpoint_rejects_bad_token(self, tmp_path):
         """POST /api/admin/reload returns 401 with wrong token."""
-        import time
         import urllib.request
         from urllib.error import HTTPError
 
-        bot, _token, port = self._make_bot_with_admin(tmp_path, port=15005)
+        bot, _token, port = self._make_bot_with_admin(tmp_path)
         server = bot._admin_server
         server.start()
-        time.sleep(0.4)
+        self._wait_until_serving(port)
 
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/admin/reload",
@@ -995,13 +1026,12 @@ token =
 
     def test_health_endpoint_returns_ok(self, tmp_path):
         """GET /api/admin/health returns 200 and status=ok."""
-        import time
         import urllib.request
 
-        bot, token, port = self._make_bot_with_admin(tmp_path, port=15006)
+        bot, token, port = self._make_bot_with_admin(tmp_path)
         server = bot._admin_server
         server.start()
-        time.sleep(0.4)
+        self._wait_until_serving(port)
 
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/admin/health",

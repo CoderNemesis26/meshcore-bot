@@ -2009,8 +2009,6 @@ class CommandManager:
                     # This command was already handled by keyword matching
                     continue
 
-                self.logger.info(f"Command '{command_name}' matched, executing")
-
                 # Check if we should queue instead of reject (for global cooldowns near expiring)
                 should_queue, remaining = self._should_queue_command(command, message)
                 if should_queue and self._queue_command(command, message, remaining):
@@ -2054,13 +2052,25 @@ class CommandManager:
                             await self.send_response(message, error_msg)
                             response_sent = True
 
-                    # Record command execution in stats database (even if it failed checks)
+                    # Soft rejection (e.g. enabled=false): do not claim the keyword.
+                    # Matches check_keywords(), which continues so another command's
+                    # alias can handle the same trigger (e.g. test aliases=path with
+                    # Path_Command disabled).
+                    if not response_sent:
+                        self.logger.debug(
+                            f"Command '{command_name}' matched but cannot execute; trying next"
+                        )
+                        continue
+
+                    # Record command execution in stats database (hard rejection with user feedback)
                     if 'stats' in self.commands:
                         stats_command = self.commands['stats']
                         if stats_command:
                             stats_command.record_command(message, command_name, response_sent)
 
                     return
+
+                self.logger.info(f"Command '{command_name}' matched, executing")
 
                 # Check network connectivity for commands that require internet
                 if command.requires_internet:
